@@ -110,7 +110,9 @@ function createWindow() {
     },
   });
   // Present as plain Chrome; some sign-in flows refuse user agents that mention Electron.
+  // Set on the session so the usage fetch below looks identical to the page.
   const ua = chat.webContents.getUserAgent().replace(/ (Electron|airlock-terminal)\/\S+/g, '');
+  chat.webContents.session.setUserAgent(ua);
   chat.webContents.setUserAgent(ua);
   // Links that open new windows go to the system browser.
   chat.webContents.setWindowOpenHandler(({ url }) => {
@@ -119,6 +121,12 @@ function createWindow() {
   });
   win.contentView.addChildView(chat);
   chat.webContents.loadURL(CHAT_URL);
+
+  // Usage stats: after the chat loads (a login may have just happened), every few minutes,
+  // and when the window regains focus.
+  chat.webContents.on('did-finish-load', () => refreshUsage(true));
+  win.on('focus', () => refreshUsage());
+  setInterval(() => refreshUsage(true), USAGE_POLL_MS);
 }
 
 // The UI renderer reports where the chat placeholder is; the view follows it.
@@ -195,6 +203,38 @@ ipcMain.handle('aws:command', (e, name) => {
 // Latest working directory reported by the shell integration, as the shell sees it.
 let termCwd = '';
 ipcMain.on('pty:cwd', (e, cwd) => { if (fromUi(e) && typeof cwd === 'string') termCwd = cwd; });
+
+// --- Claude usage (unofficial: the endpoint claude.ai's Usage page uses, ADR 0003) --------
+
+const USAGE_POLL_MS = 5 * 60 * 1000;
+let lastUsageFetch = 0;
+
+async function fetchUsage() {
+  const ses = session.fromPartition('persist:chat');
+  const get = async (p) => {
+    const res = await ses.fetch(`https://claude.ai${p}`, { headers: { accept: 'application/json' } });
+    if (!res.ok) throw new Error(`${p}: ${res.status}`);
+    return res.json();
+  };
+  // The organisation the user last had open in claude.ai.
+  const [cookie] = await ses.cookies.get({ url: 'https://claude.ai', name: 'lastActiveOrg' });
+  const orgId = cookie?.value ?? (await get('/api/organizations'))[0]?.uuid;
+  if (!orgId || !/^[\w-]+$/.test(orgId)) return null;
+  const u = await get(`/api/organizations/${orgId}/usage`);
+  const pick = (w) => (w && typeof w.utilization === 'number'
+    ? { percent: w.utilization, resetsAt: typeof w.resets_at === 'string' ? w.resets_at : null } : null);
+  const usage = { session: pick(u.five_hour), weekly: pick(u.seven_day) };
+  return usage.session || usage.weekly ? usage : null;
+}
+
+async function refreshUsage(force = false) {
+  if (!win || (!force && Date.now() - lastUsageFetch < 60 * 1000)) return;
+  lastUsageFetch = Date.now();
+  let usage = null;
+  try { usage = await fetchUsage(); } catch {}
+  win?.webContents.send('usage:update', usage); // null hides the display
+}
+ipcMain.on('usage:refresh', (e) => { if (fromUi(e)) refreshUsage(true); });
 
 // --- Snippets and airlock history (plain files in the app's user data folder) -----------
 

@@ -65,6 +65,46 @@ window.airlock.onPtyData((data) => term.write(data));
 window.airlock.onPtyExit((code) => term.write(`\r\n[shell exited with code ${code}]\r\n`));
 new ResizeObserver(() => fit.fit()).observe($('terminal'));
 
+// --- Claude usage in the title bar (ADR 0003) ----------------------------------------------
+
+function untilText(iso) {
+  const ms = new Date(iso) - Date.now();
+  if (!(ms > 0)) return 'now';
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  if (h >= 24) return new Date(iso).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+  return h ? `${h}h ${m}m` : `${m}m`;
+}
+
+function usageMeter(label, w) {
+  const el = document.createElement('span');
+  el.className = 'meter';
+  if (w.percent >= 90) el.classList.add('crit');
+  else if (w.percent >= 75) el.classList.add('warn');
+  const bar = document.createElement('span');
+  bar.className = 'bar';
+  const fill = document.createElement('span');
+  fill.style.width = `${Math.min(w.percent, 100)}%`;
+  bar.append(fill);
+  el.append(`${label} `, bar, ` ${Math.round(w.percent)}%`);
+  if (w.resetsAt) {
+    const r = document.createElement('span');
+    r.className = 'resets';
+    r.textContent = `resets ${untilText(w.resetsAt)}`;
+    el.append(r);
+    el.title = `${label} usage ${w.percent}%, resets ${new Date(w.resetsAt).toLocaleString()}`;
+  }
+  return el;
+}
+
+window.airlock.onUsage((usage) => {
+  const parts = [];
+  if (usage?.session) parts.push(usageMeter('Session', usage.session));
+  if (usage?.weekly) parts.push(usageMeter('Weekly', usage.weekly));
+  $('usage').replaceChildren(...parts);
+});
+window.airlock.refreshUsage();
+
 // --- Toasts -------------------------------------------------------------------------------
 
 function toast(text, { error = false, code = '' } = {}) {

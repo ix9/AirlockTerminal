@@ -49,6 +49,15 @@ body {
 #titlebar .spacer { flex: 1; }
 #titlebar button, #titlebar select { -webkit-app-region: no-drag; }
 
+/* Claude usage meters (ADR 0003) */
+#usage { display: flex; gap: 16px; }
+.meter { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.meter .bar { width: 60px; height: 4px; background: var(--input); border-radius: 2px; overflow: hidden; }
+.meter .bar span { display: block; height: 100%; background: var(--accent); }
+.meter.warn .bar span { background: #cca700; }
+.meter.crit .bar span { background: #f14c4c; }
+.meter .resets { color: #6e6e6e; }
+
 /* --- Layout -------------------------------------------------------------------------- */
 
 #app {
