@@ -34,7 +34,41 @@ html, body {
 }
 
 #terminal, #airlock { min-height: 0; overflow: hidden; }
-#airlock { background: var(--panel); }
+#airlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  background: var(--panel);
+}
+#airlock header { display: flex; align-items: center; gap: 6px; }
+#airlock .title { flex: 1; font-weight: 600; letter-spacing: 0.08em; color: var(--muted); }
+#airlock-text {
+  flex: 1;
+  resize: none;
+  padding: 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: 13px "Cascadia Mono", Menlo, Consolas, monospace;
+  white-space: pre;
+  outline: none;
+  transition: border-color 0.6s;
+}
+#airlock-text:focus { border-color: var(--muted); }
+#airlock-text.filled { border-color: var(--accent); transition: none; }
+
+button {
+  padding: 3px 12px;
+  background: var(--border);
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { border-color: var(--muted); }
 
 .splitter { background: var(--border); }
 .splitter:hover, .splitter.dragging { background: var(--accent); }

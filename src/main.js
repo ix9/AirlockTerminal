@@ -27,6 +27,7 @@ function createWindow() {
   chat = new WebContentsView({
     webPreferences: {
       partition: 'persist:chat',
+      preload: path.join(__dirname, 'chat-preload.js'),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
@@ -48,6 +49,13 @@ function createWindow() {
 ipcMain.on('chat:bounds', (_e, r) => chat?.setBounds(r));
 // Hidden while a divider is dragged, so the native view doesn't steal the mouse.
 ipcMain.on('chat:visible', (_e, visible) => chat?.setVisible(visible));
+
+// Copies made in the chat go to the airlock, but only from claude.ai itself.
+ipcMain.on('chat:copied', (e, text) => {
+  if (e.sender !== chat?.webContents || typeof text !== 'string') return;
+  if (new URL(e.senderFrame.url).host !== 'claude.ai') return;
+  win.webContents.send('airlock:fill', text);
+});
 
 app.whenReady().then(createWindow);
 app.on('window-all-closed', () => app.quit());

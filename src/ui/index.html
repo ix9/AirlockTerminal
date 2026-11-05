@@ -12,7 +12,15 @@
     <section id="left">
       <div id="terminal"><p class="placeholder">Terminal goes here</p></div>
       <div id="hsplit" class="splitter"></div>
-      <div id="airlock"><p class="placeholder">Airlock goes here</p></div>
+      <div id="airlock">
+        <header>
+          <span class="title">AIRLOCK</span>
+          <button id="paste">Paste</button>
+          <button id="clear">Clear</button>
+        </header>
+        <textarea id="airlock-text" spellcheck="false"
+                  placeholder="Copy a command in the chat and it lands here."></textarea>
+      </div>
     </section>
     <div id="vsplit" class="splitter"></div>
     <section id="chat"></section>

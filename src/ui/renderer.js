@@ -12,6 +12,19 @@ function syncChatBounds() {
 }
 new ResizeObserver(syncChatBounds).observe(chatSlot);
 
+// --- Airlock ----------------------------------------------------------------------------
+
+const airlockText = $('airlock-text');
+function fillAirlock(text) {
+  airlockText.value = text;
+  // Brief accent flash so the user notices the new content.
+  airlockText.classList.add('filled');
+  setTimeout(() => airlockText.classList.remove('filled'), 50);
+}
+window.airlock.onFill(fillAirlock);
+$('paste').addEventListener('click', async () => fillAirlock(await navigator.clipboard.readText()));
+$('clear').addEventListener('click', () => { airlockText.value = ''; airlockText.focus(); });
+
 // --- Dividers ---------------------------------------------------------------------------
 
 function makeSplitter(el, onMove) {
