@@ -21,20 +21,42 @@ const term = new Terminal({
   fontSize: 13,
   cursorBlink: true,
   theme: { background: '#0c0c0c' },
+  // OSC 8 hyperlinks printed by programs (ls --hyperlink, gh, etc.).
+  linkHandler: { activate: (_e, uri) => window.airlock.openExternal(uri) },
 });
 const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
+// Plain-text URLs.
+term.loadAddon(new WebLinksAddon.WebLinksAddon((_e, uri) => window.airlock.openExternal(uri)));
 term.open($('terminal'));
 fit.fit();
 
-// Ctrl+Shift+C copies the terminal selection (plain Ctrl+C stays as interrupt).
+// Zoom: Ctrl/Cmd + = / - / 0, and Ctrl+wheel.
+const DEFAULT_FONT_SIZE = 13;
+function setFontSize(size) {
+  term.options.fontSize = Math.min(Math.max(size, 8), 32);
+  fit.fit();
+}
+
 term.attachCustomKeyEventHandler((e) => {
-  if (e.type === 'keydown' && e.ctrlKey && e.shiftKey && e.code === 'KeyC' && term.hasSelection()) {
+  if (e.type !== 'keydown') return true;
+  const mod = e.ctrlKey || e.metaKey;
+  // Ctrl+Shift+C copies the terminal selection (plain Ctrl+C stays as interrupt).
+  if (e.ctrlKey && e.shiftKey && e.code === 'KeyC' && term.hasSelection()) {
     navigator.clipboard.writeText(term.getSelection());
     return false;
   }
+  if (mod && !e.altKey && (e.key === '=' || e.key === '+')) { setFontSize(term.options.fontSize + 1); return false; }
+  if (mod && !e.altKey && (e.key === '-' || e.key === '_')) { setFontSize(term.options.fontSize - 1); return false; }
+  if (mod && !e.altKey && e.key === '0') { setFontSize(DEFAULT_FONT_SIZE); return false; }
   return true;
 });
+$('terminal').addEventListener('wheel', (e) => {
+  if (!e.ctrlKey) return;
+  e.preventDefault();
+  e.stopPropagation();
+  setFontSize(term.options.fontSize + (e.deltaY < 0 ? 1 : -1));
+}, { passive: false, capture: true });
 
 term.onData((data) => window.airlock.ptyInput(data));
 term.onResize(({ cols, rows }) => window.airlock.ptyResize({ cols, rows }));

@@ -1,7 +1,7 @@
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
-const { app, BrowserWindow, WebContentsView, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell } = require('electron');
 const pty = require('node-pty');
 
 const CHAT_URL = 'https://claude.ai/';
@@ -84,6 +84,11 @@ ipcMain.on('chat:bounds', (_e, r) => chat?.setBounds(r));
 // Hidden while a divider is dragged, so the native view doesn't steal the mouse.
 ipcMain.on('chat:visible', (_e, visible) => chat?.setVisible(visible));
 
+// Links clicked in the terminal open in the system browser (web URLs only).
+ipcMain.on('open-external', (e, url) => {
+  if (fromUi(e) && typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
+});
+
 // Copies made in the chat go to the airlock, but only from claude.ai itself.
 ipcMain.on('chat:copied', (e, text) => {
   if (e.sender !== chat?.webContents || typeof text !== 'string') return;
@@ -110,6 +115,12 @@ ipcMain.on('pty:start', (e, { cols, rows, shellId }) => {
 });
 ipcMain.on('pty:input', (e, data) => { if (fromUi(e)) term?.write(data); });
 ipcMain.on('pty:resize', (e, { cols, rows }) => { if (fromUi(e)) term?.resize(cols, rows); });
+
+// No default menu: its zoom accelerators would zoom the whole window instead of the terminal.
+// macOS still needs the app and Edit menus for Cmd+Q / Cmd+C / Cmd+V to work.
+Menu.setApplicationMenu(process.platform === 'darwin'
+  ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])
+  : null);
 
 app.whenReady().then(createWindow);
 app.on('window-all-closed', () => { term?.kill(); app.quit(); });

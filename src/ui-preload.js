@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('airlock', {
   setChatBounds: (rect) => ipcRenderer.send('chat:bounds', rect),
   setChatVisible: (visible) => ipcRenderer.send('chat:visible', visible),
   onFill: (cb) => ipcRenderer.on('airlock:fill', (_e, text) => cb(text)),
+  openExternal: (url) => ipcRenderer.send('open-external', url),
 
   listShells: () => ipcRenderer.invoke('shells:list'),
   ptyStart: (opts) => ipcRenderer.send('pty:start', opts),
