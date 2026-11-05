@@ -41,8 +41,23 @@ the middle of the workflow without slowing it down.
   ([ADR 0003](adr/0003-claude-usage-stats.md)).
 - **VS Code-style window:** a custom dark title bar instead of the native one.
 
+## Iteration 3
+- **Scratchpad:** a tab that takes over the terminal area (the shell keeps running underneath)
+  for long snippets. **Execute** runs the highlighted text in the terminal, **Save** writes a
+  text file to the terminal's current directory, and **Split** gives two panes that can be
+  compared side by side. Both panes and the split are kept between sessions.
+- **Terminal tabs:** each tab has its own shell, working directory, env strip and AWS selection.
+  The airlock and scratchpad are shared and act on the active terminal
+  ([ADR 0004](adr/0004-tabs-and-saved-state.md)).
+- **Themes:** Dark Modern, Light Modern, high contrast, or following the system.
+- **Settings** are remembered: window size, divider positions, font size, last shell and theme.
+- **Saved terminal output** (opt-in) restores tabs and their output after a restart.
+- **Snippets folder:** snippets can live in a git or synced folder.
+- **Installers:** unsigned builds for Windows, macOS and Linux, on GitHub Releases.
+
 ## Out of scope (for now)
 - Using an existing browser profile.
 - Running commands automatically, or parsing chat content beyond copy events.
-- Tabs, themes, plugins, multiple terminals.
+- Plugins.
+- SSH from the shell picker. Running `ssh` by hand works, without cwd or env reporting.
 - File editing (Wave-style). Possible later, as its own ADR.

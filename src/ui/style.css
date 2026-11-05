@@ -1,16 +1,85 @@
-/* Colours follow VS Code's "Dark Modern" theme. */
 :root {
   --titlebar-height: 35px; /* keep in sync with TITLEBAR_HEIGHT in main.js */
+  --left-width: 50%;
+  --airlock-height: 240px;
+  --scratch-left: 50%;
+
+  /* VS Code "Dark Modern". Other themes below override these. */
+  color-scheme: dark;
   --bg: #181818;           /* terminal / editor */
   --panel: #1f1f1f;        /* toolbars, airlock */
   --input: #313131;
+  --hover: #3c3c3c;
+  --list-hover: #2a2d2e;
   --border: #2b2b2b;
+  --control-border: transparent;
   --text: #cccccc;
   --muted: #9d9d9d;
+  --dim: #6e6e6e;
   --accent: #0078d4;
   --accent-hover: #026ec1;
-  --left-width: 50%;
-  --airlock-height: 240px;
+  --focus: #0078d4;
+  --on-accent: #ffffff;
+  --warn: #cca700;
+  --error: #f14c4c;
+  --env-key: #9cdcfe;
+  --shadow: rgba(0, 0, 0, 0.5);
+  --diff-del: rgba(241, 76, 76, 0.13);
+  --diff-del-strong: rgba(241, 76, 76, 0.4);
+  --diff-add: rgba(46, 160, 67, 0.13);
+  --diff-add-strong: rgba(46, 160, 67, 0.4);
+}
+
+/* VS Code "Light Modern" */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --panel: #f8f8f8;
+  --input: #ffffff;
+  --hover: #e8e8e8;
+  --list-hover: #f2f2f2;
+  --border: #e5e5e5;
+  --control-border: #cecece;
+  --text: #3b3b3b;
+  --muted: #5f5f5f;
+  --dim: #767676;
+  --accent: #005fb8;
+  --accent-hover: #0258a8;
+  --focus: #005fb8;
+  --warn: #9a6700;
+  --error: #c72e0f;
+  --env-key: #0451a5;
+  --shadow: rgba(0, 0, 0, 0.2);
+  --diff-del: rgba(199, 46, 15, 0.1);
+  --diff-del-strong: rgba(199, 46, 15, 0.3);
+  --diff-add: rgba(46, 160, 67, 0.12);
+  --diff-add-strong: rgba(46, 160, 67, 0.35);
+}
+
+/* VS Code "Dark High Contrast" */
+:root[data-theme="contrast"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --panel: #000000;
+  --input: #000000;
+  --hover: #1f1f1f;
+  --list-hover: #1f1f1f;
+  --border: #6fc3df;
+  --control-border: #6fc3df;
+  --text: #ffffff;
+  --muted: #ffffff;
+  --dim: #d0d0d0;
+  --accent: #0e639c;
+  --accent-hover: #1177bb;
+  --focus: #f38518;
+  --warn: #ffd700;
+  --error: #ff6b6b;
+  --env-key: #9cdcfe;
+  --shadow: transparent;
+  --diff-del: rgba(255, 80, 80, 0.3);
+  --diff-del-strong: rgba(255, 80, 80, 0.65);
+  --diff-add: rgba(60, 220, 90, 0.25);
+  --diff-add-strong: rgba(60, 220, 90, 0.6);
 }
 
 * { box-sizing: border-box; }
@@ -54,9 +123,9 @@ body {
 .meter { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .meter .bar { width: 60px; height: 4px; background: var(--input); border-radius: 2px; overflow: hidden; }
 .meter .bar span { display: block; height: 100%; background: var(--accent); }
-.meter.warn .bar span { background: #cca700; }
-.meter.crit .bar span { background: #f14c4c; }
-.meter .resets { color: #6e6e6e; }
+.meter.warn .bar span { background: var(--warn); }
+.meter.crit .bar span { background: var(--error); }
+.meter .resets { color: var(--dim); }
 
 /* --- Layout -------------------------------------------------------------------------- */
 
@@ -68,12 +137,13 @@ body {
 
 #left {
   display: grid;
-  grid-template-rows: auto auto 1fr 4px var(--airlock-height);
+  grid-template-rows: auto auto auto minmax(0, 1fr) 4px var(--airlock-height);
   /* Named areas, so a hidden env strip doesn't shift the other rows. */
-  grid-template-areas: "toolbar" "envbar" "terminal" "hsplit" "airlock";
+  grid-template-areas: "tabs" "toolbar" "envbar" "terminal" "hsplit" "airlock";
   min-width: 0;
   min-height: 0;
 }
+#view-tabs { grid-area: tabs; }
 #toolbar { grid-area: toolbar; }
 #envbar { grid-area: envbar; }
 #terminal-wrap { grid-area: terminal; }
@@ -81,7 +151,7 @@ body {
 #airlock { grid-area: airlock; }
 
 .splitter { background: var(--border); }
-.splitter:hover, .splitter.dragging { background: var(--accent); }
+.splitter:hover, .splitter.dragging { background: var(--focus); }
 #vsplit { cursor: col-resize; }
 #hsplit { cursor: row-resize; }
 
@@ -89,6 +159,7 @@ body {
 
 #toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 4px 8px;
@@ -97,7 +168,11 @@ body {
 }
 
 #terminal-wrap { position: relative; min-height: 0; overflow: hidden; }
-#terminal { height: 100%; overflow: hidden; padding: 4px 0 0 8px; }
+#terminal { position: relative; height: 100%; overflow: hidden; }
+/* All terminals stay laid out at full size so background shells never see a resize. Hidden
+   rather than just covered, so they can't take keyboard focus while out of sight. */
+.terminal-host { position: absolute; inset: 4px 0 0 8px; visibility: hidden; }
+.terminal-host.active { visibility: inherit; }
 
 #toasts {
   position: absolute;
@@ -107,6 +182,7 @@ body {
   flex-direction: column;
   gap: 6px;
   pointer-events: none;
+  z-index: 2; /* above the scratchpad */
 }
 .toast {
   max-width: 480px;
@@ -115,11 +191,11 @@ body {
   border: 1px solid var(--border);
   border-left: 3px solid var(--accent);
   border-radius: 2px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 2px 8px var(--shadow);
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-.toast.error { border-left-color: #f14c4c; }
+.toast.error { border-left-color: var(--error); }
 .toast code { font-family: "Cascadia Mono", Menlo, Consolas, monospace; }
 
 /* Environment variables changed in this terminal session (ADR 0002). */
@@ -146,8 +222,121 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.env-chip b { color: #9cdcfe; font-weight: normal; }
+.env-chip b { color: var(--env-key); font-weight: normal; }
 .env-chip.removed { text-decoration: line-through; color: var(--muted); }
+
+/* --- Terminal / Scratchpad tabs ------------------------------------------------------------ */
+
+#view-tabs { align-items: stretch; min-width: 0; background: var(--panel); }
+#view-tabs .spacer { flex: 1; min-width: 8px; }
+#view-tabs .tab { flex: none; height: 30px; padding: 0 12px; }
+#terminal-tabs { display: flex; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+#terminal-tabs .tab {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  max-width: 200px;
+  padding: 0 4px 0 12px;
+  border-right: 1px solid var(--border);
+  font-weight: normal;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  user-select: none;
+}
+#terminal-tabs .label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#terminal-tabs .tab.exited .label { color: var(--dim); font-style: italic; }
+#terminal-tabs .tab-close {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--muted);
+  visibility: hidden;
+}
+#terminal-tabs .tab:hover .tab-close, #terminal-tabs .tab.active .tab-close { visibility: visible; }
+#terminal-tabs .tab-close:hover { background: var(--hover); color: var(--text); }
+
+/* --- Scratchpad --------------------------------------------------------------------------- */
+
+/* Laid over the terminal, which keeps its size so the shell never sees a resize. */
+#terminal-wrap.overlay-open #terminal { visibility: hidden; }
+#scratchpad {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: var(--panel);
+}
+#scratchpad[hidden], #scratch-panes[hidden], #scratch-compare[hidden], .save-form[hidden], .save[hidden] { display: none; }
+#scratch-panes { display: grid; grid-template-columns: 1fr; height: 100%; min-height: 0; }
+#scratchpad.split #scratch-panes { grid-template-columns: minmax(0, var(--scratch-left)) 4px minmax(0, 1fr); }
+#scratch-split { cursor: col-resize; }
+#scratchpad:not(.split) #scratch-split,
+#scratchpad:not(.split) .pad:last-child,
+#scratchpad:not(.split) .split-only,
+#scratchpad.split .single-only { display: none; }
+
+.pad { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.pad-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.pad-bar .spacer { flex: 1; }
+.pad-bar .close { padding: 0 8px; }
+.save-form { display: flex; gap: 6px; min-width: 0; }
+.save-name { width: 180px; min-width: 60px; }
+.pad textarea {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  padding: 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: none;
+  font: 13px "Cascadia Mono", Menlo, Consolas, monospace;
+  white-space: pre;
+  outline: none;
+}
+
+#scratch-compare { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+#compare-rows {
+  flex: 1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-content: start;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg);
+  font: 13px "Cascadia Mono", Menlo, Consolas, monospace;
+}
+#compare-rows .num { padding: 0 8px; color: var(--dim); text-align: right; user-select: none; }
+#compare-rows .text { padding: 0 8px 0 4px; white-space: pre-wrap; overflow-wrap: anywhere; }
+#compare-rows .num.side-b { border-left: 1px solid var(--border); }
+#compare-rows .del { background: var(--diff-del); }
+#compare-rows .add { background: var(--diff-add); }
+#compare-rows .gap { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--border) 4px 5px); }
+#compare-rows mark { color: inherit; }
+#compare-rows .del mark { background: var(--diff-del-strong); }
+#compare-rows .add mark { background: var(--diff-add-strong); }
+
+/* --- Settings ----------------------------------------------------------------------------- */
+
+#settings { position: absolute; inset: 0; z-index: 1; overflow-y: auto; padding: 8px 16px 16px; background: var(--bg); }
+#settings[hidden] { display: none; }
+#settings section { max-width: 640px; margin-bottom: 20px; }
+#settings h2 { margin: 12px 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+#settings .row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+#settings .hint { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+#settings code { font: 12px "Cascadia Mono", Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+#settings input[type="checkbox"] { height: auto; margin: 0; }
 
 /* --- Airlock ----------------------------------------------------------------------------- */
 
@@ -166,7 +355,7 @@ body {
   min-height: 0;
   padding: 6px 8px 8px;
 }
-#airlock-main header { display: flex; align-items: center; gap: 6px; }
+#airlock-main header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 #snippet-form { display: flex; gap: 6px; }
 #snippet-form[hidden] { display: none; }
 
@@ -183,6 +372,7 @@ body {
   flex: 1;
   height: 30px;
   background: none;
+  border: none;
   border-radius: 0;
   border-bottom: 1px solid transparent;
   color: var(--muted);
@@ -192,7 +382,7 @@ body {
   text-transform: uppercase;
 }
 .tab:hover { background: none; color: var(--text); }
-.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.tab.active { color: var(--text); border-bottom-color: var(--focus); }
 #filter { margin: 6px; }
 #library-list { flex: 1; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
 #library-list li {
@@ -202,7 +392,7 @@ body {
   padding: 4px 8px;
   cursor: pointer;
 }
-#library-list li:hover { background: #2a2d2e; }
+#library-list li:hover { background: var(--list-hover); }
 #library-list .name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #library-list .cmd {
   font: 12px "Cascadia Mono", Menlo, Consolas, monospace;
@@ -220,12 +410,12 @@ input {
   padding: 0 6px;
   background: var(--input);
   color: var(--text);
-  border: 1px solid transparent;
+  border: 1px solid var(--control-border);
   border-radius: 2px;
   font: inherit;
   outline: none;
 }
-input:focus { border-color: var(--accent); }
+input:focus { border-color: var(--focus); }
 .section-title {
   flex: 1;
   font-size: 11px;
@@ -247,23 +437,24 @@ input:focus { border-color: var(--accent); }
   outline: none;
   transition: border-color 0.6s;
 }
-#airlock-text:focus { border-color: var(--accent); }
+#airlock-text:focus { border-color: var(--focus); }
 #airlock-text.filled { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); transition: none; }
 
 /* --- Controls ---------------------------------------------------------------------------- */
 
 button, select {
   height: 24px;
+  white-space: nowrap;
   padding: 0 10px;
   background: var(--input);
   color: var(--text);
-  border: 1px solid transparent;
+  border: 1px solid var(--control-border);
   border-radius: 2px;
   font: inherit;
   cursor: pointer;
 }
-button:hover { background: #3c3c3c; }
-button.primary { background: var(--accent); color: #fff; }
+button:hover { background: var(--hover); }
+button.primary { background: var(--accent); color: var(--on-accent); }
 button.primary:hover { background: var(--accent-hover); }
 select { padding: 0 6px; }
-button:focus-visible, select:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+button:focus-visible, select:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
