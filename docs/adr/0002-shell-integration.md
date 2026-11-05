@@ -25,8 +25,12 @@ profile/rc, so prompt themes (oh-my-posh, starship, p10k) keep working. On every
 emits a private OSC sequence:
 
 ```
-ESC ] 7337 ; airlock ; <base64 JSON {"cwd": "...", "env": {...}}> BEL
+ESC ] 7337 ; airlock ; base64(cwd) ; base64(KEY=VALUE pairs separated by NUL) BEL
 ```
+
+NUL-separated pairs, rather than JSON, can be produced with shell built-ins alone (`compgen -e`
+in bash, `$parameters` in zsh, `[Environment]` in PowerShell). That avoids depending on
+`jq`, `python` or `env -0`, which macOS lacks.
 
 - **pwsh / Windows PowerShell:** `-NoExit -Command ". '<integration.ps1>'"`. The script wraps
   the existing `prompt` function.

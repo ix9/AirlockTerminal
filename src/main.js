@@ -1,3 +1,4 @@
+const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
@@ -11,35 +12,69 @@ let win;
 let chat;
 let term;
 
-// Shells offered in the toolbar. The UI only ever sends back an id from this list.
+// --- Shells ---------------------------------------------------------------------------------
+// Each shell is launched with the integration script for its kind (ADR 0002). The UI only
+// ever sends back an id from this list.
+
+const INTEGRATION_DIR = path.join(__dirname, 'shell-integration');
+
 function listShells() {
   const shells = [];
   if (process.platform === 'win32') {
+    const ps1 = path.join(INTEGRATION_DIR, 'airlock.ps1').replace(/'/g, "''");
+    const psArgs = ['-NoLogo', '-NoExit', '-Command', `. '${ps1}'`];
     try {
       execFileSync('where.exe', ['pwsh'], { stdio: 'ignore' });
-      shells.push({ id: 'pwsh', label: 'PowerShell 7', file: 'pwsh.exe', args: ['-NoLogo'] });
+      shells.push({ id: 'pwsh', label: 'PowerShell 7', kind: 'pwsh', file: 'pwsh.exe', args: psArgs });
     } catch {}
-    shells.push({ id: 'powershell', label: 'Windows PowerShell', file: 'powershell.exe', args: ['-NoLogo'] });
+    shells.push({ id: 'powershell', label: 'Windows PowerShell', kind: 'pwsh', file: 'powershell.exe', args: psArgs });
     try {
       // `wsl -l -q` prints UTF-16LE. Docker's internal distros aren't for interactive use.
       const out = execFileSync('wsl.exe', ['-l', '-q'], { encoding: 'utf16le', stdio: ['ignore', 'pipe', 'ignore'] });
       for (const name of out.split(/\r?\n/).map((s) => s.replace(/\0/g, '').trim())) {
         if (name && !name.startsWith('docker-desktop'))
-          shells.push({ id: `wsl:${name}`, label: `WSL: ${name}`, file: 'wsl.exe', args: ['-d', name, '--cd', '~'] });
+          shells.push({ id: `wsl:${name}`, label: `WSL: ${name}`, kind: 'wsl', distro: name });
       }
     } catch {}
   } else {
-    const fs = require('node:fs');
     const paths = new Set([process.env.SHELL || '/bin/bash']);
     try {
       for (const line of fs.readFileSync('/etc/shells', 'utf8').split('\n'))
         if (line.startsWith('/') && fs.existsSync(line.trim())) paths.add(line.trim());
     } catch {}
-    for (const p of paths) shells.push({ id: p, label: p, file: p, args: ['-l'] });
+    for (const p of paths) shells.push({ id: p, label: p, kind: 'unix', file: p });
   }
   return shells;
 }
 const shells = listShells();
+
+// Arguments/env that start a bash or zsh with integration; other shells start plain.
+function unixLaunch(shellPath, integrationDir) {
+  const name = shellPath.split('/').pop();
+  if (name === 'bash') return { args: ['--init-file', `${integrationDir}/airlock.bash`, '-i'], env: {} };
+  if (name === 'zsh') return { args: ['-l'], env: { ZDOTDIR: `${integrationDir}/zsh`, AIRLOCK_USER_ZDOTDIR: process.env.ZDOTDIR || '' } };
+  return { args: ['-l'], env: {} };
+}
+
+// Resolve a shell entry to the actual command line.
+function launchSpec(s) {
+  if (s.kind === 'pwsh') return { file: s.file, args: s.args, env: {} };
+  if (s.kind === 'unix') return { file: s.file, ...unixLaunch(s.file, INTEGRATION_DIR) };
+  // WSL: ask the distro for the user's login shell and where our scripts appear inside it.
+  let shellPath = '';
+  let dir = '';
+  try {
+    // --exec passes argv straight through (`--` would re-parse it with the user's shell).
+    [shellPath, dir] = execFileSync('wsl.exe', ['-d', s.distro, '--exec', 'sh', '-c',
+      'getent passwd "$(id -un)" | cut -d: -f7; wslpath -a "$0"', INTEGRATION_DIR.replace(/\\/g, '/')],
+    { encoding: 'utf8', timeout: 15000 }).trim().split('\n').map((l) => l.trim());
+  } catch {}
+  const base = ['-d', s.distro, '--cd', '~'];
+  if (!shellPath || !dir) return { file: 'wsl.exe', args: base, env: {} };
+  const { args, env } = unixLaunch(shellPath, dir);
+  const envArgs = Object.entries(env).map(([k, v]) => `${k}=${v}`);
+  return { file: 'wsl.exe', args: [...base, '--exec', 'env', ...envArgs, shellPath, ...args], env: {} };
+}
 
 function createWindow() {
   win = new BrowserWindow({
@@ -111,9 +146,9 @@ ipcMain.handle('shells:list', (e) => (fromUi(e) ? shells.map(({ id, label }) => 
 ipcMain.on('pty:start', (e, { cols, rows, shellId }) => {
   if (!fromUi(e)) return;
   term?.kill();
-  const { file, args } = shells.find((s) => s.id === shellId) ?? shells[0];
+  const { file, args, env } = launchSpec(shells.find((s) => s.id === shellId) ?? shells[0]);
   const p = pty.spawn(file, args, {
-    name: 'xterm-256color', cols, rows, cwd: os.homedir(), env: process.env,
+    name: 'xterm-256color', cols, rows, cwd: os.homedir(), env: { ...process.env, ...env },
   });
   p.onData((data) => win.webContents.send('pty:data', data));
   p.onExit(({ exitCode }) => { if (term === p) win.webContents.send('pty:exit', exitCode); });
@@ -121,6 +156,9 @@ ipcMain.on('pty:start', (e, { cols, rows, shellId }) => {
 });
 ipcMain.on('pty:input', (e, data) => { if (fromUi(e)) term?.write(data); });
 ipcMain.on('pty:resize', (e, { cols, rows }) => { if (fromUi(e)) term?.resize(cols, rows); });
+// Latest working directory reported by the shell integration, as the shell sees it.
+let termCwd = '';
+ipcMain.on('pty:cwd', (e, cwd) => { if (fromUi(e) && typeof cwd === 'string') termCwd = cwd; });
 
 // No default menu: its zoom accelerators would zoom the whole window instead of the terminal.
 // macOS still needs the app and Edit menus for Cmd+Q / Cmd+C / Cmd+V to work.

@@ -14,4 +14,5 @@ contextBridge.exposeInMainWorld('airlock', {
   ptyResize: (size) => ipcRenderer.send('pty:resize', size),
   onPtyData: (cb) => ipcRenderer.on('pty:data', (_e, data) => cb(data)),
   onPtyExit: (cb) => ipcRenderer.on('pty:exit', (_e, code) => cb(code)),
+  reportCwd: (cwd) => ipcRenderer.send('pty:cwd', cwd),
 });

@@ -65,10 +65,77 @@ window.airlock.onPtyData((data) => term.write(data));
 window.airlock.onPtyExit((code) => term.write(`\r\n[shell exited with code ${code}]\r\n`));
 new ResizeObserver(() => fit.fit()).observe($('terminal'));
 
+// --- Shell integration: cwd + environment reported on every prompt (ADR 0002) ----------
+
+const utf8 = new TextDecoder();
+const b64 = (s) => utf8.decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)));
+
+// Variables that change on their own and say nothing about what the user set.
+const ENV_IGNORE = /^(PWD|OLDPWD|_|SHLVL|LINES|COLUMNS|PS1|PS2|PROMPT|RPROMPT|PROMPT_COMMAND|POSH_.*|STARSHIP_.*|__.*|COMP_.*|TERM_SESSION_ID|LS_COLORS)$/i;
+// Values never shown in full, so the panel is safe to screen-share.
+const SECRET = /(SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|PRIVATE|API_?KEY|ACCESS_KEY|SESSION_KEY)/i;
+
+let envBaseline = null;
+let cwd = '';
+
+function parseEnv(s) {
+  const env = new Map();
+  for (const pair of s.split('\0')) {
+    const i = pair.indexOf('=', 1); // names can start with '=' on Windows (=C:)
+    if (i > 0) env.set(pair.slice(0, i), pair.slice(i + 1));
+  }
+  return env;
+}
+
+function renderEnv(env) {
+  const bar = $('envbar');
+  const chips = [];
+  for (const [k, v] of env) {
+    if (ENV_IGNORE.test(k) || envBaseline.get(k) === v) continue;
+    const chip = document.createElement('span');
+    chip.className = 'env-chip';
+    const shown = SECRET.test(k) ? '••••••' : v;
+    chip.innerHTML = '<b></b>=';
+    chip.firstChild.textContent = k;
+    chip.append(shown);
+    chip.title = `${k}=${shown}`;
+    chips.push(chip);
+  }
+  for (const k of envBaseline.keys()) {
+    if (ENV_IGNORE.test(k) || env.has(k)) continue;
+    const chip = document.createElement('span');
+    chip.className = 'env-chip removed';
+    chip.textContent = k;
+    chip.title = `${k} (unset)`;
+    chips.push(chip);
+  }
+  const label = document.createElement('span');
+  label.className = 'label';
+  label.textContent = 'ENV';
+  bar.replaceChildren(label, ...chips);
+  bar.hidden = chips.length === 0;
+}
+
+term.parser.registerOscHandler(7337, (data) => {
+  const [tag, cwdB64, envB64] = data.split(';');
+  if (tag !== 'airlock') return false;
+  try {
+    cwd = b64(cwdB64 || '');
+    const env = parseEnv(b64(envB64 || ''));
+    envBaseline ??= env;
+    renderEnv(env);
+    window.airlock.reportCwd(cwd);
+  } catch {}
+  return true; // consumed: never shown in the terminal
+});
+
 // --- Shell picker -----------------------------------------------------------------------
 
 const shellPicker = $('shell');
 function startShell() {
+  envBaseline = null;
+  cwd = '';
+  $('envbar').hidden = true;
   term.reset();
   window.airlock.ptyStart({ cols: term.cols, rows: term.rows, shellId: shellPicker.value });
   term.focus();

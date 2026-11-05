@@ -59,7 +59,7 @@ body {
 
 #left {
   display: grid;
-  grid-template-rows: auto 1fr 4px var(--airlock-height);
+  grid-template-rows: auto auto 1fr 4px var(--airlock-height);
   min-width: 0;
   min-height: 0;
 }
@@ -81,6 +81,33 @@ body {
 }
 
 #terminal { min-height: 0; overflow: hidden; padding: 4px 0 0 8px; }
+
+/* Environment variables changed in this terminal session (ADR 0002). */
+#envbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  max-height: 64px;
+  overflow-y: auto;
+}
+#envbar[hidden] { display: none; }
+#envbar .label { margin-right: 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: var(--muted); }
+.env-chip {
+  max-width: 360px;
+  padding: 1px 6px;
+  background: var(--input);
+  border-radius: 2px;
+  font: 12px "Cascadia Mono", Menlo, Consolas, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.env-chip b { color: #9cdcfe; font-weight: normal; }
+.env-chip.removed { text-decoration: line-through; color: var(--muted); }
 
 /* --- Airlock ----------------------------------------------------------------------------- */
 
