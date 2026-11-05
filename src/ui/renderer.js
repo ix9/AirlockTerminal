@@ -1,5 +1,6 @@
 const $ = (id) => document.getElementById(id);
 const root = document.documentElement.style;
+if (window.airlock.platform === 'darwin') document.documentElement.classList.add('mac');
 
 // --- Chat view follows its placeholder -------------------------------------------------
 
@@ -20,7 +21,7 @@ const term = new Terminal({
     '"JetBrainsMono Nerd Font Mono", "MesloLGS NF", "Cascadia Mono", Menlo, Consolas, monospace',
   fontSize: 13,
   cursorBlink: true,
-  theme: { background: '#0c0c0c' },
+  theme: { background: '#181818', foreground: '#cccccc', selectionBackground: '#264f78' },
   // OSC 8 hyperlinks printed by programs (ls --hyperlink, gh, etc.).
   linkHandler: { activate: (_e, uri) => window.airlock.openExternal(uri) },
 });

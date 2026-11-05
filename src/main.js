@@ -5,6 +5,7 @@ const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell } = require('e
 const pty = require('node-pty');
 
 const CHAT_URL = 'https://claude.ai/';
+const TITLEBAR_HEIGHT = 35; // keep in sync with --titlebar-height in style.css
 
 let win;
 let chat;
@@ -45,8 +46,13 @@ function createWindow() {
     width: 1600,
     height: 900,
     title: 'Airlock Terminal',
-    backgroundColor: '#0c0c0c',
-    autoHideMenuBar: true,
+    backgroundColor: '#181818',
+    // VS Code-style: our own title bar; the OS draws only the window buttons over it.
+    titleBarStyle: 'hidden',
+    ...(process.platform !== 'darwin' && {
+      titleBarOverlay: { color: '#181818', symbolColor: '#cccccc', height: TITLEBAR_HEIGHT },
+    }),
+    trafficLightPosition: { x: 12, y: 10 },
     webPreferences: {
       preload: path.join(__dirname, 'ui-preload.js'),
       contextIsolation: true,

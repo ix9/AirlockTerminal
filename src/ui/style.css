@@ -1,10 +1,14 @@
+/* Colours follow VS Code's "Dark Modern" theme. */
 :root {
-  --bg: #0c0c0c;
-  --panel: #161616;
-  --border: #2a2a2a;
-  --text: #d4d4d4;
-  --muted: #7a7a7a;
-  --accent: #d97757;
+  --titlebar-height: 35px; /* keep in sync with TITLEBAR_HEIGHT in main.js */
+  --bg: #181818;           /* terminal / editor */
+  --panel: #1f1f1f;        /* toolbars, airlock */
+  --input: #313131;
+  --border: #2b2b2b;
+  --text: #cccccc;
+  --muted: #9d9d9d;
+  --accent: #0078d4;
+  --accent-hover: #026ec1;
   --left-width: 50%;
   --airlock-height: 200px;
 }
@@ -16,77 +20,48 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font: 13px system-ui, sans-serif;
+  font: 13px system-ui, -apple-system, "Segoe UI", sans-serif;
   overflow: hidden;
 }
 
+body {
+  display: grid;
+  grid-template-rows: var(--titlebar-height) 1fr;
+}
+
+/* --- Title bar ----------------------------------------------------------------------- */
+
+#titlebar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  /* Leave room for the OS window buttons (Windows/Linux right, macOS left). */
+  padding: 0 calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px) 0 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+.mac #titlebar { padding-left: 80px; }
+#titlebar .app-name { color: var(--text); }
+#titlebar .spacer { flex: 1; }
+#titlebar button, #titlebar select { -webkit-app-region: no-drag; }
+
+/* --- Layout -------------------------------------------------------------------------- */
+
 #app {
   display: grid;
-  grid-template-columns: var(--left-width) 5px 1fr;
-  height: 100%;
+  grid-template-columns: var(--left-width) 4px 1fr;
+  min-height: 0;
 }
 
 #left {
   display: grid;
-  grid-template-rows: auto 1fr 5px var(--airlock-height);
+  grid-template-rows: auto 1fr 4px var(--airlock-height);
   min-width: 0;
   min-height: 0;
-}
-
-#terminal, #airlock { min-height: 0; overflow: hidden; }
-#airlock {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 6px;
-  background: var(--panel);
-}
-#airlock header { display: flex; align-items: center; gap: 6px; }
-#airlock .title { flex: 1; font-weight: 600; letter-spacing: 0.08em; color: var(--muted); }
-#airlock-text {
-  flex: 1;
-  resize: none;
-  padding: 8px;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  font: 13px "Cascadia Mono", Menlo, Consolas, monospace;
-  white-space: pre;
-  outline: none;
-  transition: border-color 0.6s;
-}
-#airlock-text:focus { border-color: var(--muted); }
-#airlock-text.filled { border-color: var(--accent); transition: none; }
-
-button {
-  padding: 3px 12px;
-  background: var(--border);
-  color: var(--text);
-  border: 1px solid transparent;
-  border-radius: 4px;
-  font: inherit;
-  cursor: pointer;
-}
-button:hover { border-color: var(--muted); }
-button.primary { background: var(--accent); color: #fff; }
-
-#terminal { padding: 4px 0 0 6px; }
-
-#toolbar {
-  display: flex;
-  gap: 6px;
-  padding: 6px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
-}
-select {
-  padding: 3px 6px;
-  background: var(--border);
-  color: var(--text);
-  border: 1px solid transparent;
-  border-radius: 4px;
-  font: inherit;
 }
 
 .splitter { background: var(--border); }
@@ -94,10 +69,69 @@ select {
 #vsplit { cursor: col-resize; }
 #hsplit { cursor: row-resize; }
 
-.placeholder {
-  display: grid;
-  place-items: center;
-  height: 100%;
-  margin: 0;
+/* --- Toolbar + terminal ---------------------------------------------------------------- */
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+#terminal { min-height: 0; overflow: hidden; padding: 4px 0 0 8px; }
+
+/* --- Airlock ----------------------------------------------------------------------------- */
+
+#airlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 6px 8px 8px;
+  background: var(--panel);
+}
+#airlock header { display: flex; align-items: center; gap: 6px; }
+.section-title {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--muted);
 }
+#airlock-text {
+  flex: 1;
+  resize: none;
+  padding: 8px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  font: 13px "Cascadia Mono", Menlo, Consolas, monospace;
+  white-space: pre;
+  outline: none;
+  transition: border-color 0.6s;
+}
+#airlock-text:focus { border-color: var(--accent); }
+#airlock-text.filled { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); transition: none; }
+
+/* --- Controls ---------------------------------------------------------------------------- */
+
+button, select {
+  height: 24px;
+  padding: 0 10px;
+  background: var(--input);
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  font: inherit;
+  cursor: pointer;
+}
+button:hover { background: #3c3c3c; }
+button.primary { background: var(--accent); color: #fff; }
+button.primary:hover { background: var(--accent-hover); }
+select { padding: 0 6px; }
+button:focus-visible, select:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
