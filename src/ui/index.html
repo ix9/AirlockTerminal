@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <title>Airlock Terminal</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="app">
+    <section id="left">
+      <div id="terminal"><p class="placeholder">Terminal goes here</p></div>
+      <div id="hsplit" class="splitter"></div>
+      <div id="airlock"><p class="placeholder">Airlock goes here</p></div>
+    </section>
+    <div id="vsplit" class="splitter"></div>
+    <section id="chat"></section>
+  </main>
+  <script src="renderer.js"></script>
+</body>
+</html>
