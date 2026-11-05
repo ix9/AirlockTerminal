@@ -10,15 +10,35 @@ let win;
 let chat;
 let term;
 
-function defaultShell() {
-  if (process.platform !== 'win32') return { file: process.env.SHELL || '/bin/bash', args: [] };
-  try {
-    execFileSync('where.exe', ['pwsh'], { stdio: 'ignore' });
-    return { file: 'pwsh.exe', args: ['-NoLogo'] };
-  } catch {
-    return { file: 'powershell.exe', args: ['-NoLogo'] };
+// Shells offered in the toolbar. The UI only ever sends back an id from this list.
+function listShells() {
+  const shells = [];
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('where.exe', ['pwsh'], { stdio: 'ignore' });
+      shells.push({ id: 'pwsh', label: 'PowerShell 7', file: 'pwsh.exe', args: ['-NoLogo'] });
+    } catch {}
+    shells.push({ id: 'powershell', label: 'Windows PowerShell', file: 'powershell.exe', args: ['-NoLogo'] });
+    try {
+      // `wsl -l -q` prints UTF-16LE. Docker's internal distros aren't for interactive use.
+      const out = execFileSync('wsl.exe', ['-l', '-q'], { encoding: 'utf16le', stdio: ['ignore', 'pipe', 'ignore'] });
+      for (const name of out.split(/\r?\n/).map((s) => s.replace(/\0/g, '').trim())) {
+        if (name && !name.startsWith('docker-desktop'))
+          shells.push({ id: `wsl:${name}`, label: `WSL: ${name}`, file: 'wsl.exe', args: ['-d', name, '--cd', '~'] });
+      }
+    } catch {}
+  } else {
+    const fs = require('node:fs');
+    const paths = new Set([process.env.SHELL || '/bin/bash']);
+    try {
+      for (const line of fs.readFileSync('/etc/shells', 'utf8').split('\n'))
+        if (line.startsWith('/') && fs.existsSync(line.trim())) paths.add(line.trim());
+    } catch {}
+    for (const p of paths) shells.push({ id: p, label: p, file: p, args: ['-l'] });
   }
+  return shells;
 }
+const shells = listShells();
 
 function createWindow() {
   win = new BrowserWindow({
@@ -75,10 +95,12 @@ ipcMain.on('chat:copied', (e, text) => {
 
 const fromUi = (e) => e.sender === win?.webContents;
 
-ipcMain.on('pty:start', (e, { cols, rows }) => {
+ipcMain.handle('shells:list', (e) => (fromUi(e) ? shells.map(({ id, label }) => ({ id, label })) : []));
+
+ipcMain.on('pty:start', (e, { cols, rows, shellId }) => {
   if (!fromUi(e)) return;
   term?.kill();
-  const { file, args } = defaultShell();
+  const { file, args } = shells.find((s) => s.id === shellId) ?? shells[0];
   const p = pty.spawn(file, args, {
     name: 'xterm-256color', cols, rows, cwd: os.homedir(), env: process.env,
   });

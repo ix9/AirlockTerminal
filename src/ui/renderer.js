@@ -42,8 +42,20 @@ window.airlock.onPtyData((data) => term.write(data));
 window.airlock.onPtyExit((code) => term.write(`\r\n[shell exited with code ${code}]\r\n`));
 new ResizeObserver(() => fit.fit()).observe($('terminal'));
 
-window.airlock.ptyStart({ cols: term.cols, rows: term.rows });
-term.focus();
+// --- Shell picker -----------------------------------------------------------------------
+
+const shellPicker = $('shell');
+function startShell() {
+  term.reset();
+  window.airlock.ptyStart({ cols: term.cols, rows: term.rows, shellId: shellPicker.value });
+  term.focus();
+}
+window.airlock.listShells().then((shells) => {
+  for (const s of shells) shellPicker.add(new Option(s.label, s.id));
+  startShell();
+});
+shellPicker.addEventListener('change', startShell);
+$('restart').addEventListener('click', startShell);
 
 // --- Airlock ----------------------------------------------------------------------------
 

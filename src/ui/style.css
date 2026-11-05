@@ -28,7 +28,7 @@ html, body {
 
 #left {
   display: grid;
-  grid-template-rows: 1fr 5px var(--airlock-height);
+  grid-template-rows: auto 1fr 5px var(--airlock-height);
   min-width: 0;
   min-height: 0;
 }
@@ -72,6 +72,22 @@ button:hover { border-color: var(--muted); }
 button.primary { background: var(--accent); color: #fff; }
 
 #terminal { padding: 4px 0 0 6px; }
+
+#toolbar {
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+select {
+  padding: 3px 6px;
+  background: var(--border);
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font: inherit;
+}
 
 .splitter { background: var(--border); }
 .splitter:hover, .splitter.dragging { background: var(--accent); }

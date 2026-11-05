@@ -6,7 +6,8 @@ contextBridge.exposeInMainWorld('airlock', {
   setChatVisible: (visible) => ipcRenderer.send('chat:visible', visible),
   onFill: (cb) => ipcRenderer.on('airlock:fill', (_e, text) => cb(text)),
 
-  ptyStart: (size) => ipcRenderer.send('pty:start', size),
+  listShells: () => ipcRenderer.invoke('shells:list'),
+  ptyStart: (opts) => ipcRenderer.send('pty:start', opts),
   ptyInput: (data) => ipcRenderer.send('pty:input', data),
   ptyResize: (size) => ipcRenderer.send('pty:resize', size),
   onPtyData: (cb) => ipcRenderer.on('pty:data', (_e, data) => cb(data)),
