@@ -69,6 +69,9 @@ button {
   cursor: pointer;
 }
 button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); color: #fff; }
+
+#terminal { padding: 4px 0 0 6px; }
 
 .splitter { background: var(--border); }
 .splitter:hover, .splitter.dragging { background: var(--accent); }

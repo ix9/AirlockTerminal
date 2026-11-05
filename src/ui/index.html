@@ -5,26 +5,30 @@
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
   <title>Airlock Terminal</title>
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <main id="app">
     <section id="left">
-      <div id="terminal"><p class="placeholder">Terminal goes here</p></div>
+      <div id="terminal"></div>
       <div id="hsplit" class="splitter"></div>
       <div id="airlock">
         <header>
           <span class="title">AIRLOCK</span>
           <button id="paste">Paste</button>
           <button id="clear">Clear</button>
+          <button id="run" class="primary" title="Send to terminal (Ctrl+Enter)">Run ⏎</button>
         </header>
         <textarea id="airlock-text" spellcheck="false"
-                  placeholder="Copy a command in the chat and it lands here."></textarea>
+                  placeholder="Copy a command in the chat and it lands here. Ctrl+Enter runs it."></textarea>
       </div>
     </section>
     <div id="vsplit" class="splitter"></div>
     <section id="chat"></section>
   </main>
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

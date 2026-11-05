@@ -12,6 +12,39 @@ function syncChatBounds() {
 }
 new ResizeObserver(syncChatBounds).observe(chatSlot);
 
+// --- Terminal ---------------------------------------------------------------------------
+
+const term = new Terminal({
+  // Nerd Fonts first so prompt themes (oh-my-posh, starship, powerlevel10k) show their icons.
+  fontFamily: '"CaskaydiaCove Nerd Font Mono", "CaskaydiaMono Nerd Font Mono", ' +
+    '"JetBrainsMono Nerd Font Mono", "MesloLGS NF", "Cascadia Mono", Menlo, Consolas, monospace',
+  fontSize: 13,
+  cursorBlink: true,
+  theme: { background: '#0c0c0c' },
+});
+const fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+term.open($('terminal'));
+fit.fit();
+
+// Ctrl+Shift+C copies the terminal selection (plain Ctrl+C stays as interrupt).
+term.attachCustomKeyEventHandler((e) => {
+  if (e.type === 'keydown' && e.ctrlKey && e.shiftKey && e.code === 'KeyC' && term.hasSelection()) {
+    navigator.clipboard.writeText(term.getSelection());
+    return false;
+  }
+  return true;
+});
+
+term.onData((data) => window.airlock.ptyInput(data));
+term.onResize(({ cols, rows }) => window.airlock.ptyResize({ cols, rows }));
+window.airlock.onPtyData((data) => term.write(data));
+window.airlock.onPtyExit((code) => term.write(`\r\n[shell exited with code ${code}]\r\n`));
+new ResizeObserver(() => fit.fit()).observe($('terminal'));
+
+window.airlock.ptyStart({ cols: term.cols, rows: term.rows });
+term.focus();
+
 // --- Airlock ----------------------------------------------------------------------------
 
 const airlockText = $('airlock-text');
@@ -24,6 +57,20 @@ function fillAirlock(text) {
 window.airlock.onFill(fillAirlock);
 $('paste').addEventListener('click', async () => fillAirlock(await navigator.clipboard.readText()));
 $('clear').addEventListener('click', () => { airlockText.value = ''; airlockText.focus(); });
+
+// Run: paste into the terminal (xterm.js applies bracketed paste when the shell asks for it),
+// then press Enter. The text stays in the airlock so it can be tweaked and run again.
+function runAirlock() {
+  const text = airlockText.value.replace(/\s+$/, '');
+  if (!text) return;
+  term.paste(text);
+  window.airlock.ptyInput('\r');
+  term.focus();
+}
+$('run').addEventListener('click', runAirlock);
+airlockText.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runAirlock(); }
+});
 
 // --- Dividers ---------------------------------------------------------------------------
 
