@@ -27,6 +27,20 @@ the middle of the workflow without slowing it down.
 6. Installers for Windows and macOS (Linux AppImage if feasible), published on GitHub
    Releases.
 
+## Iteration 2
+- URLs in the terminal are clickable. Terminal text zooms with Ctrl/Cmd + `=` / `-` / `0`
+  and Ctrl+wheel.
+- **Snippets:** a saved collection of commands. Picking one loads it into the airlock.
+- **History:** every command run from the airlock is kept, and can be reloaded from the list.
+- **AWS profiles:** a picker listing the profiles in `~/.aws/config`. Choosing one sends the
+  right command for the shell (`$env:AWS_PROFILE = '…'` or `export AWS_PROFILE='…'`).
+- **Environment panel:** variables changed in this terminal session, at the top left of the
+  terminal ([ADR 0002](adr/0002-shell-integration.md)).
+- **Downloads** from the chat pane auto-save into the terminal's current directory.
+- **Usage stats:** Claude session and weekly usage in the title bar
+  ([ADR 0003](adr/0003-claude-usage-stats.md)).
+- **VS Code-style window:** a custom dark title bar instead of the native one.
+
 ## Out of scope (for now)
 - Using an existing browser profile.
 - Running commands automatically, or parsing chat content beyond copy events.
