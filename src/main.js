@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
-const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, shell } = require('electron');
 const pty = require('node-pty');
 
 const CHAT_URL = 'https://claude.ai/';
@@ -196,11 +196,49 @@ ipcMain.handle('aws:command', (e, name) => {
 let termCwd = '';
 ipcMain.on('pty:cwd', (e, cwd) => { if (fromUi(e) && typeof cwd === 'string') termCwd = cwd; });
 
+// --- Downloads from the chat land in the terminal's current directory -------------------
+
+// The terminal's cwd as a path this (host) process can write to.
+function hostCwd() {
+  if (!termCwd) return '';
+  if (currentShell?.kind !== 'wsl') return termCwd;
+  const mnt = termCwd.match(/^\/mnt\/([a-z])(\/.*)?$/i);
+  if (mnt) return `${mnt[1].toUpperCase()}:${(mnt[2] || '/').replace(/\//g, '\\')}`;
+  return `\\\\wsl.localhost\\${currentShell.distro}${termCwd.replace(/\//g, '\\')}`;
+}
+
+function uniquePath(dir, filename) {
+  const { name, ext } = path.parse(filename);
+  let candidate = path.join(dir, filename);
+  for (let i = 1; fs.existsSync(candidate); i++) candidate = path.join(dir, `${name} (${i})${ext}`);
+  return candidate;
+}
+
+function handleDownloads() {
+  session.fromPartition('persist:chat').on('will-download', (_e, item) => {
+    let dir = hostCwd();
+    try { if (!dir || !fs.statSync(dir).isDirectory()) dir = ''; } catch { dir = ''; }
+    const savePath = uniquePath(dir || app.getPath('downloads'), item.getFilename());
+    item.setSavePath(savePath);
+    item.once('done', (_ev, state) => {
+      // Windows' "downloaded from the internet" marker is an NTFS stream; on a WSL filesystem
+      // it shows up as a stray "<file>:Zone.Identifier" file instead, so drop it there.
+      if (savePath.startsWith('\\\\wsl')) fs.rm(`${savePath}:Zone.Identifier`, { force: true }, () => {});
+      win?.webContents.send('download:done', {
+        state, savePath, displayPath: dir ? savePath.replace(dir, termCwd).replace(/\\/g, currentShell?.kind === 'wsl' ? '/' : '\\') : savePath,
+      });
+    });
+  });
+}
+
 // No default menu: its zoom accelerators would zoom the whole window instead of the terminal.
 // macOS still needs the app and Edit menus for Cmd+Q / Cmd+C / Cmd+V to work.
 Menu.setApplicationMenu(process.platform === 'darwin'
   ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])
   : null);
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  handleDownloads();
+  createWindow();
+});
 app.on('window-all-closed', () => { term?.kill(); app.quit(); });

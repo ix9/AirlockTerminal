@@ -65,6 +65,26 @@ window.airlock.onPtyData((data) => term.write(data));
 window.airlock.onPtyExit((code) => term.write(`\r\n[shell exited with code ${code}]\r\n`));
 new ResizeObserver(() => fit.fit()).observe($('terminal'));
 
+// --- Toasts -------------------------------------------------------------------------------
+
+function toast(text, { error = false, code = '' } = {}) {
+  const el = document.createElement('div');
+  el.className = error ? 'toast error' : 'toast';
+  el.textContent = text;
+  if (code) {
+    const c = document.createElement('code');
+    c.textContent = code;
+    el.append(' ', c);
+  }
+  $('toasts').append(el);
+  setTimeout(() => el.remove(), 6000);
+}
+
+window.airlock.onDownloadDone(({ state, displayPath }) => {
+  if (state === 'completed') toast('Downloaded to', { code: displayPath });
+  else toast(`Download ${state}:`, { error: true, code: displayPath });
+});
+
 // --- Shell integration: cwd + environment reported on every prompt (ADR 0002) ----------
 
 const utf8 = new TextDecoder();

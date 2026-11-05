@@ -80,7 +80,31 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
-#terminal { min-height: 0; overflow: hidden; padding: 4px 0 0 8px; }
+#terminal-wrap { position: relative; min-height: 0; overflow: hidden; }
+#terminal { height: 100%; overflow: hidden; padding: 4px 0 0 8px; }
+
+#toasts {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: none;
+}
+.toast {
+  max-width: 480px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 2px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.toast.error { border-left-color: #f14c4c; }
+.toast code { font-family: "Cascadia Mono", Menlo, Consolas, monospace; }
 
 /* Environment variables changed in this terminal session (ADR 0002). */
 #envbar {
