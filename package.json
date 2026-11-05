@@ -67,7 +67,7 @@
           ]
         }
       ],
-      "signAndEditExecutable": false,
+      "signExecutable": false,
       "icon": "src/assets/icon.png"
     },
     "nsis": {
