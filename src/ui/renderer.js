@@ -214,11 +214,137 @@ function runAirlock() {
   const text = airlockText.value.replace(/\s+$/, '');
   if (!text) return;
   sendCommand(text);
+  window.airlock.addHistory(text);
+  cmdHistory.push({ ts: new Date().toISOString(), command: text });
+  if (libraryTab === 'history') renderLibrary();
   term.focus();
 }
 $('run').addEventListener('click', runAirlock);
 airlockText.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runAirlock(); }
+});
+
+// --- Snippets / History sidebar ----------------------------------------------------------
+// Clicking an entry loads it into the airlock; it never runs anything by itself.
+
+let snippets = [];
+let cmdHistory = [];
+let libraryTab = 'snippets';
+const list = $('library-list');
+
+function ago(iso) {
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return 'now';
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
+function item({ label, mono, meta, title, onPick, onDelete }) {
+  const li = document.createElement('li');
+  li.title = title;
+  const name = document.createElement('span');
+  name.className = mono ? 'name cmd' : 'name';
+  name.textContent = label;
+  li.append(name);
+  if (meta) {
+    const m = document.createElement('span');
+    m.className = 'meta';
+    m.textContent = meta;
+    li.append(m);
+  }
+  if (onDelete) {
+    const del = document.createElement('button');
+    del.className = 'delete';
+    del.textContent = '×';
+    del.title = 'Delete snippet';
+    del.addEventListener('click', (e) => { e.stopPropagation(); onDelete(); });
+    li.append(del);
+  }
+  li.addEventListener('click', onPick);
+  return li;
+}
+
+function renderLibrary() {
+  const q = $('filter').value.trim().toLowerCase();
+  const matches = (...fields) => !q || fields.some((f) => f.toLowerCase().includes(q));
+  let items;
+  if (libraryTab === 'snippets') {
+    items = snippets.filter((s) => matches(s.name, s.command)).map((s) => item({
+      label: s.name,
+      title: s.command,
+      onPick: () => fillAirlock(s.command),
+      onDelete: async () => {
+        snippets = snippets.filter((x) => x !== s);
+        await window.airlock.saveSnippets(snippets);
+        renderLibrary();
+      },
+    }));
+  } else {
+    // Newest first, each command once (its latest run).
+    const seen = new Set();
+    items = [];
+    for (let i = cmdHistory.length - 1; i >= 0; i--) {
+      const h = cmdHistory[i];
+      if (seen.has(h.command) || !matches(h.command)) continue;
+      seen.add(h.command);
+      items.push(item({
+        label: h.command.split('\n')[0] + (h.command.includes('\n') ? ' …' : ''),
+        mono: true,
+        meta: ago(h.ts),
+        title: h.command,
+        onPick: () => fillAirlock(h.command),
+      }));
+    }
+  }
+  if (!items.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = q ? 'No matches'
+      : libraryTab === 'snippets' ? 'No snippets yet. Use "Save snippet".' : 'Commands you run from the airlock appear here.';
+    items = [li];
+  }
+  list.replaceChildren(...items);
+}
+
+function showTab(tab) {
+  libraryTab = tab;
+  $('tab-snippets').classList.toggle('active', tab === 'snippets');
+  $('tab-history').classList.toggle('active', tab === 'history');
+  renderLibrary();
+}
+$('tab-snippets').addEventListener('click', () => showTab('snippets'));
+$('tab-history').addEventListener('click', () => showTab('history'));
+$('filter').addEventListener('input', renderLibrary);
+
+// Save the airlock text as a snippet (inline name field; Electron has no prompt()).
+const snippetForm = $('snippet-form');
+function toggleSnippetForm(show) {
+  snippetForm.hidden = !show;
+  $('save-snippet').hidden = show;
+  if (show) $('snippet-name').focus();
+}
+$('save-snippet').addEventListener('click', () => {
+  if (airlockText.value.trim()) toggleSnippetForm(true);
+});
+$('snippet-cancel').addEventListener('click', () => toggleSnippetForm(false));
+snippetForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = $('snippet-name').value.trim();
+  const command = airlockText.value.replace(/\s+$/, '');
+  if (!name || !command) return;
+  snippets = [...snippets.filter((s) => s.name !== name), { name, command }]
+    .sort((a, b) => a.name.localeCompare(b.name));
+  await window.airlock.saveSnippets(snippets);
+  $('snippet-name').value = '';
+  toggleSnippetForm(false);
+  showTab('snippets');
+});
+
+Promise.all([window.airlock.listSnippets(), window.airlock.listHistory()]).then(([s, h]) => {
+  snippets = s;
+  cmdHistory = h;
+  renderLibrary();
 });
 
 // --- Dividers ---------------------------------------------------------------------------

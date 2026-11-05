@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld('airlock', {
   onPtyExit: (cb) => ipcRenderer.on('pty:exit', (_e, code) => cb(code)),
   reportCwd: (cwd) => ipcRenderer.send('pty:cwd', cwd),
   onDownloadDone: (cb) => ipcRenderer.on('download:done', (_e, info) => cb(info)),
+  listSnippets: () => ipcRenderer.invoke('snippets:list'),
+  saveSnippets: (list) => ipcRenderer.invoke('snippets:save', list),
+  listHistory: () => ipcRenderer.invoke('history:list'),
+  addHistory: (command) => ipcRenderer.send('history:add', command),
   awsProfiles: () => ipcRenderer.invoke('aws:profiles'),
   awsCommand: (name) => ipcRenderer.invoke('aws:command', name),
 });

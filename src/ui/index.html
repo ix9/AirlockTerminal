@@ -30,14 +30,30 @@
       </div>
       <div id="hsplit" class="splitter"></div>
       <div id="airlock">
-        <header>
-          <span class="section-title">Airlock</span>
-          <button id="paste">Paste</button>
-          <button id="clear">Clear</button>
-          <button id="run" class="primary" title="Send to terminal (Ctrl+Enter)">Run ⏎</button>
-        </header>
-        <textarea id="airlock-text" spellcheck="false"
-                  placeholder="Copy a command in the chat and it lands here. Ctrl+Enter runs it."></textarea>
+        <aside id="library">
+          <nav class="tabs">
+            <button id="tab-snippets" class="tab active">Snippets</button>
+            <button id="tab-history" class="tab">History</button>
+          </nav>
+          <input id="filter" type="search" placeholder="Filter" spellcheck="false">
+          <ul id="library-list"></ul>
+        </aside>
+        <div id="airlock-main">
+          <header>
+            <span class="section-title">Airlock</span>
+            <form id="snippet-form" hidden>
+              <input id="snippet-name" placeholder="Snippet name" spellcheck="false" required>
+              <button type="submit">Save</button>
+              <button type="button" id="snippet-cancel">Cancel</button>
+            </form>
+            <button id="save-snippet" title="Save the airlock text as a snippet">Save snippet</button>
+            <button id="paste">Paste</button>
+            <button id="clear">Clear</button>
+            <button id="run" class="primary" title="Send to terminal (Ctrl+Enter)">Run ⏎</button>
+          </header>
+          <textarea id="airlock-text" spellcheck="false"
+                    placeholder="Copy a command in the chat and it lands here. Ctrl+Enter runs it."></textarea>
+        </div>
       </div>
     </section>
     <div id="vsplit" class="splitter"></div>

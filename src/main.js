@@ -196,6 +196,45 @@ ipcMain.handle('aws:command', (e, name) => {
 let termCwd = '';
 ipcMain.on('pty:cwd', (e, cwd) => { if (fromUi(e) && typeof cwd === 'string') termCwd = cwd; });
 
+// --- Snippets and airlock history (plain files in the app's user data folder) -----------
+
+const dataFile = (name) => path.join(app.getPath('userData'), name);
+const HISTORY_LIMIT = 500;
+
+function readSnippets() {
+  try {
+    const list = JSON.parse(fs.readFileSync(dataFile('snippets.json'), 'utf8'));
+    return Array.isArray(list) ? list.filter((s) => typeof s?.name === 'string' && typeof s?.command === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+ipcMain.handle('snippets:list', (e) => (fromUi(e) ? readSnippets() : []));
+ipcMain.handle('snippets:save', (e, list) => {
+  if (!fromUi(e) || !Array.isArray(list)) return false;
+  const clean = list
+    .filter((s) => typeof s?.name === 'string' && typeof s?.command === 'string')
+    .map(({ name, command }) => ({ name, command }));
+  fs.writeFileSync(dataFile('snippets.json'), `${JSON.stringify(clean, null, 2)}\n`);
+  return true;
+});
+
+ipcMain.handle('history:list', (e) => {
+  if (!fromUi(e)) return [];
+  try {
+    return fs.readFileSync(dataFile('history.jsonl'), 'utf8').split('\n').filter(Boolean).slice(-HISTORY_LIMIT)
+      .map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+  } catch {
+    return [];
+  }
+});
+ipcMain.on('history:add', (e, command) => {
+  if (!fromUi(e) || typeof command !== 'string' || !command.trim()) return;
+  const entry = { ts: new Date().toISOString(), shell: currentShell?.id ?? '', command };
+  fs.appendFile(dataFile('history.jsonl'), `${JSON.stringify(entry)}\n`, () => {});
+});
+
 // --- Downloads from the chat land in the terminal's current directory -------------------
 
 // The terminal's cwd as a path this (host) process can write to.

@@ -10,7 +10,7 @@
   --accent: #0078d4;
   --accent-hover: #026ec1;
   --left-width: 50%;
-  --airlock-height: 200px;
+  --airlock-height: 240px;
 }
 
 * { box-sizing: border-box; }
@@ -60,9 +60,16 @@ body {
 #left {
   display: grid;
   grid-template-rows: auto auto 1fr 4px var(--airlock-height);
+  /* Named areas, so a hidden env strip doesn't shift the other rows. */
+  grid-template-areas: "toolbar" "envbar" "terminal" "hsplit" "airlock";
   min-width: 0;
   min-height: 0;
 }
+#toolbar { grid-area: toolbar; }
+#envbar { grid-area: envbar; }
+#terminal-wrap { grid-area: terminal; }
+#hsplit { grid-area: hsplit; }
+#airlock { grid-area: airlock; }
 
 .splitter { background: var(--border); }
 .splitter:hover, .splitter.dragging { background: var(--accent); }
@@ -136,15 +143,80 @@ body {
 /* --- Airlock ----------------------------------------------------------------------------- */
 
 #airlock {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--panel);
+}
+#airlock-main {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
   min-height: 0;
-  overflow: hidden;
   padding: 6px 8px 8px;
-  background: var(--panel);
 }
-#airlock header { display: flex; align-items: center; gap: 6px; }
+#airlock-main header { display: flex; align-items: center; gap: 6px; }
+#snippet-form { display: flex; gap: 6px; }
+#snippet-form[hidden] { display: none; }
+
+/* Snippets / History sidebar */
+#library {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+}
+.tabs { display: flex; border-bottom: 1px solid var(--border); }
+.tab {
+  flex: 1;
+  height: 30px;
+  background: none;
+  border-radius: 0;
+  border-bottom: 1px solid transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.tab:hover { background: none; color: var(--text); }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); }
+#filter { margin: 6px; }
+#library-list { flex: 1; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+#library-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+#library-list li:hover { background: #2a2d2e; }
+#library-list .name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#library-list .cmd {
+  font: 12px "Cascadia Mono", Menlo, Consolas, monospace;
+  color: var(--muted);
+}
+#library-list .meta { color: var(--muted); font-size: 11px; white-space: nowrap; }
+#library-list .delete { visibility: hidden; height: 18px; padding: 0 6px; background: none; color: var(--muted); }
+#library-list li:hover .delete { visibility: visible; }
+#library-list .delete:hover { color: var(--text); }
+#library-list .empty { color: var(--muted); cursor: default; }
+#library-list .empty:hover { background: none; }
+
+input {
+  height: 24px;
+  padding: 0 6px;
+  background: var(--input);
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  font: inherit;
+  outline: none;
+}
+input:focus { border-color: var(--accent); }
 .section-title {
   flex: 1;
   font-size: 11px;
