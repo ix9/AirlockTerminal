@@ -46,7 +46,7 @@ it can't run on macOS or Linux.
 ## Consequences
 - Not the user's real browser profile. They log in once inside the app.
 - claude.ai page scripts could call the exposed copy hook. The worst case is text appearing in
-  the airlock, which never runs without Ctrl+Enter.
+  the airlock. It can't run from that alone: see [ADR 0005](0005-double-copy.md).
 - node-pty ships prebuilt binaries for Windows and macOS. Linux needs build tools
   (`python3`, `make`, `g++`) at `npm install`.
 - Future file editing (for example Monaco) fits the same renderer model and will get its own

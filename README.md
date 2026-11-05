@@ -2,7 +2,8 @@
 
 Airlock Terminal puts a web chat (claude.ai) and a real terminal in one window, with an airlock
 between them. Anything you copy in the chat lands in the airlock. You check it, edit it, and
-send it to the shell with `Ctrl+Enter`. Nothing runs until you say so.
+send it to the shell with `Ctrl+Enter`. Nothing runs until you say so: press Run, or copy the same
+text twice quickly (this can be turned off in Settings).
 
 Runs on Windows, macOS and Linux.
 
@@ -32,6 +33,7 @@ Builds are unsigned, so each OS warns on first launch:
 - [Objective](docs/OBJECTIVE.md)
 - [ADR 0001: Electron + node-pty + xterm.js](docs/adr/0001-electron-node-pty-xterm.md)
 - [ADR 0004: Terminal tabs and saved state](docs/adr/0004-tabs-and-saved-state.md)
+- [ADR 0005: Double-copy runs a command](docs/adr/0005-double-copy.md)
 - [Dependencies](docs/DEPENDENCIES.md)
 
 ## Licence

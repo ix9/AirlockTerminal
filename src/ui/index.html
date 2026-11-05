@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob: http: https:">
   <title>Airlock Terminal</title>
   <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
   <link rel="stylesheet" href="style.css">
@@ -54,6 +54,8 @@
                 <option value="dark">Dark Modern</option>
                 <option value="light">Light Modern</option>
                 <option value="contrast">High contrast</option>
+                <option value="monokai">Monokai</option>
+                <option value="oceanic">Oceanic Next</option>
               </select>
             </label>
             <p class="hint">The chat pane follows along when claude.ai's own appearance setting is on Auto.</p>
@@ -63,6 +65,23 @@
             <label class="row"><input id="setting-scrollback" type="checkbox"> Save terminal tabs and their output between sessions</label>
             <p class="hint">Keeps up to 5,000 lines per tab in a file only your account can read. Anything printed
               on screen, including secrets, is written to disk. Turning this off deletes the file.</p>
+          </section>
+          <section>
+            <h2>Double-copy</h2>
+            <label class="row"><input id="setting-double-copy" type="checkbox"> Run a command when it's copied twice quickly</label>
+            <p class="hint">Copying the same text twice within 1.5 seconds, from the chat or a runsheet, sends it to the
+              airlock and runs it in the terminal straight away, with no chance to check it first.</p>
+          </section>
+          <section>
+            <h2>Sites with Auto-run on</h2>
+            <ul id="setting-web-sites"></ul>
+            <p class="hint">On these sites in the Web tab, a double-copy runs in the terminal. Only turn this on for sites you
+              trust, because a page controls what it copies. It needs HTTPS.</p>
+          </section>
+          <section>
+            <h2>Runsheet folder</h2>
+            <div class="row"><code id="setting-runsheet-folder"></code></div>
+            <div class="row"><button id="setting-runsheet-choose">Choose…</button></div>
           </section>
           <section>
             <h2>Snippets folder</h2>
@@ -112,8 +131,68 @@
       </div>
     </section>
     <div id="vsplit" class="splitter"></div>
-    <section id="chat"></section>
+    <section id="right">
+      <nav id="right-tabs" class="tabs">
+        <button id="tab-claude" class="tab">Claude</button>
+        <button id="tab-web" class="tab" title="Browse any site and copy commands from it">Web</button>
+        <button id="tab-runsheet" class="tab" title="A script to work through, read-only">Runsheet</button>
+      </nav>
+      <div id="right-body">
+        <section id="chat"></section>
+        <div id="web" hidden>
+          <header id="web-bar" class="pad-bar">
+            <button id="web-back" class="nav" title="Back" aria-label="Back" disabled>←</button>
+            <button id="web-forward" class="nav" title="Forward" aria-label="Forward" disabled>→</button>
+            <button id="web-reload" class="nav" title="Reload" aria-label="Reload" disabled>↻</button>
+            <form id="web-form">
+              <input id="web-address" type="text" placeholder="Address or search" spellcheck="false" autocomplete="off" aria-label="Address">
+            </form>
+            <button id="web-auto-run" disabled>Auto-run: Off</button>
+            <button id="web-external" class="nav" title="Open in your system browser" aria-label="Open in your system browser" disabled>↗</button>
+          </header>
+          <div id="web-slot">
+            <p id="web-empty">Enter an address above. Copying from a page sends it to the airlock. To run commands with a double-copy, turn on Auto-run for that site.</p>
+          </div>
+        </div>
+        <div id="runsheet" hidden>
+          <header id="runsheet-bar" class="pad-bar">
+            <button id="runsheet-toggle" title="Show or hide the file list" aria-expanded="false">Files ▾</button>
+            <span id="runsheet-name"></span>
+            <span id="runsheet-lang"></span>
+            <span class="spacer"></span>
+            <button id="runsheet-reload" title="Read the file again">Reload</button>
+            <button id="runsheet-airlock" class="primary" title="Send the highlighted text to the airlock. This never runs it.">To airlock</button>
+          </header>
+          <div id="runsheet-files">
+            <div class="pad-bar">
+              <button id="runsheet-folder">Choose folder…</button>
+              <input id="runsheet-filter" type="search" placeholder="Filter" spellcheck="false" aria-label="Filter files">
+              <code id="runsheet-folder-path"></code>
+            </div>
+            <ul id="runsheet-list"></ul>
+          </div>
+          <div id="runsheet-view" hidden>
+            <div id="runsheet-scroll">
+              <div id="runsheet-content">
+                <div id="runsheet-band" hidden></div>
+                <pre id="runsheet-gutter" aria-hidden="true"></pre>
+                <pre id="runsheet-code"><code></code></pre>
+              </div>
+            </div>
+            <button id="runsheet-copy" hidden title="Copy this block to the clipboard and the airlock. Copy twice quickly to run it.">Copy</button>
+          </div>
+          <article id="runsheet-page" hidden></article>
+        </div>
+      </div>
+    </section>
   </main>
+  <footer id="statusbar">
+    <span id="status-message" role="status"></span>
+    <span class="spacer"></span>
+    <span id="status-aws"></span>
+    <span id="status-cwd"></span>
+    <span id="status-shell"></span>
+  </footer>
   <template id="pad-template">
     <section class="pad">
       <header class="pad-bar">
@@ -136,6 +215,10 @@
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
   <script src="../../node_modules/@xterm/addon-serialize/lib/addon-serialize.js"></script>
+  <script src="../../node_modules/marked/lib/marked.umd.js"></script>
+  <script src="../../node_modules/dompurify/dist/purify.min.js"></script>
+  <script src="../../node_modules/@highlightjs/cdn-assets/highlight.min.js"></script>
+  <script src="../../node_modules/@highlightjs/cdn-assets/languages/powershell.min.js"></script>
   <script src="themes.js"></script>
   <script src="diff.js"></script>
   <script src="renderer.js"></script>

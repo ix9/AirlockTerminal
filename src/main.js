@@ -2,11 +2,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
 const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, nativeTheme, screen, session, shell } = require('electron');
 const pty = require('node-pty');
 
 const CHAT_URL = 'https://claude.ai/';
 const TITLEBAR_HEIGHT = 35; // keep in sync with --titlebar-height in style.css
+const APP_ICON = path.join(__dirname, 'assets', 'icon.png');
 
 let win;
 let chat;
@@ -31,10 +33,12 @@ const THEMES = {
   dark: { background: '#181818', symbols: '#cccccc' },
   light: { background: '#f8f8f8', symbols: '#3b3b3b' },
   contrast: { background: '#000000', symbols: '#ffffff' },
+  monokai: { background: '#1e1f1c', symbols: '#f8f8f2' },
+  oceanic: { background: '#1b2b34', symbols: '#d8dee9' },
 };
 
 const isPercent = (v) => Number.isFinite(v) && v > 0 && v < 100;
-// What the UI may change. The window and snippets folder are set only by this process.
+// What the UI may change. The window, folders, files and web settings are set only by this process.
 const SETTING_RULES = {
   theme: (v) => v === 'system' || Object.hasOwn(THEMES, v),
   fontSize: (v) => Number.isFinite(v) && v >= 8 && v <= 32,
@@ -43,6 +47,8 @@ const SETTING_RULES = {
   airlockHeight: isPercent,
   scratchLeft: isPercent,
   saveScrollback: (v) => typeof v === 'boolean',
+  rightTab: (v) => v === 'claude' || v === 'web' || v === 'runsheet',
+  doubleCopyRun: (v) => typeof v === 'boolean',
 };
 
 let settings = { theme: 'dark' };
@@ -53,6 +59,10 @@ function loadSettings() {
     const raw = JSON.parse(fs.readFileSync(dataFile('settings.json'), 'utf8'));
     for (const [key, valid] of Object.entries(SETTING_RULES)) if (valid(raw[key])) settings[key] = raw[key];
     if (typeof raw.snippetsDir === 'string') settings.snippetsDir = raw.snippetsDir;
+    if (typeof raw.runsheetPath === 'string') settings.runsheetPath = raw.runsheetPath;
+    if (typeof raw.runsheetFolder === 'string') settings.runsheetFolder = raw.runsheetFolder;
+    if (typeof raw.webUrl === 'string' && /^https?:\/\//i.test(raw.webUrl)) settings.webUrl = raw.webUrl;
+    if (Array.isArray(raw.webAutoRunSites)) settings.webAutoRunSites = raw.webAutoRunSites.filter((s) => typeof s === 'string' && s.startsWith('https://'));
     const w = raw.window;
     if (w && [w.x, w.y, w.width, w.height].every(Number.isFinite)) settings.window = { ...w, maximized: w.maximized === true };
   } catch {} // no file yet, or unreadable: defaults
@@ -61,7 +71,8 @@ function loadSettings() {
 function flushSettings() {
   clearTimeout(settingsTimer);
   settingsTimer = null;
-  try { writeFileAtomic(dataFile('settings.json'), `${JSON.stringify(settings, null, 2)}\n`); } catch {}
+  // Private because it holds the last web address, which may include a token.
+  try { writeFileAtomic(dataFile('settings.json'), `${JSON.stringify(settings, null, 2)}\n`, PRIVATE_FILE); } catch {}
 }
 function saveSettings() {
   clearTimeout(settingsTimer);
@@ -173,6 +184,7 @@ function createWindow() {
   win = new BrowserWindow({
     ...initialBounds(),
     title: 'Airlock Terminal',
+    icon: APP_ICON,
     backgroundColor: background,
     // VS Code-style: our own title bar; the OS draws only the window buttons over it.
     titleBarStyle: 'hidden',
@@ -189,6 +201,10 @@ function createWindow() {
   });
   if (!settings.window || settings.window.maximized) win.maximize();
   for (const event of ['resize', 'move', 'maximize', 'unmaximize']) win.on(event, rememberWindow);
+  // The UI never navigates away from itself, whatever a link in a runsheet says.
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  uiGesture = trackCopyGestures(win.webContents);
   win.on('close', () => { rememberWindow(); flushSettings(); });
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
 
@@ -212,6 +228,7 @@ function createWindow() {
     if (/^https?:/.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
+  chatGesture = trackCopyGestures(chat.webContents);
   win.contentView.addChildView(chat);
   chat.webContents.loadURL(CHAT_URL);
 
@@ -232,11 +249,40 @@ ipcMain.on('open-external', (e, url) => {
   if (fromUi(e) && typeof url === 'string' && /^https?:\/\//i.test(url)) shell.openExternal(url);
 });
 
-// Copies made in the chat go to the airlock, but only from claude.ai itself.
+// Double-copy runs a command (ADR 0005), so a copy only counts if a real click or key press caused
+// it. Pages can call the clipboard whenever they like, but these events come from outside them.
+// Each press has its own id: a held key adds none, and one click that writes twice has one id.
+const COPY_GESTURE_MS = 1000;
+let chatGesture = () => null;
+let uiGesture = () => null;
+
+function trackCopyGestures(contents) {
+  let id = 0;
+  let at = 0;
+  const copyKey = process.platform === 'darwin' ? 'meta' : 'control';
+  contents.on('before-input-event', (_e, input) => {
+    if (input.type === 'keyDown' && !input.isAutoRepeat && input.key.toLowerCase() === 'c'
+      && input[copyKey] && !input.alt && !input.shift) { id++; at = Date.now(); }
+  });
+  contents.on('before-mouse-event', (_e, mouse) => {
+    if (mouse.type === 'mouseDown') { id++; at = Date.now(); }
+  });
+  return () => (Date.now() - at <= COPY_GESTURE_MS ? id : null);
+}
+
+// Copies made in the chat go to the airlock, but only from claude.ai itself. Only its top frame
+// can count towards a double-copy. Web tab pages are handled separately because they can be anything.
 ipcMain.on('chat:copied', (e, text) => {
-  if (e.sender !== chat?.webContents || typeof text !== 'string') return;
+  if (typeof text !== 'string') return;
+  if (e.sender === web?.webContents) { receiveWebCopy(e, text); return; }
+  if (e.sender !== chat?.webContents) return;
   if (new URL(e.senderFrame.url).host !== 'claude.ai') return;
-  win.webContents.send('airlock:fill', text);
+  const gesture = e.senderFrame === chat.webContents.mainFrame ? chatGesture() : null;
+  win.webContents.send('airlock:fill', { text, gesture: gesture === null ? null : `chat:${gesture}` });
+});
+ipcMain.on('copy:gesture', (e) => {
+  const gesture = fromUi(e) ? uiGesture() : null;
+  e.returnValue = gesture === null ? null : `ui:${gesture}`;
 });
 
 // --- Terminal: node-pty lives here; the UI's xterm.js talks to it over IPC ---------------
@@ -483,6 +529,243 @@ ipcMain.on('history:add', (e, command) => {
   fs.appendFile(dataFile('history.jsonl'), `${JSON.stringify(entry)}\n`, PRIVATE_FILE, () => {});
 });
 
+// --- Runsheet: a script shown read-only in the right pane -----------------------------------
+// The UI only ever names a file from the listing of the folder the user chose.
+
+const RUNSHEET_MAX_BYTES = 2 * 1024 * 1024;
+const RUNSHEET_MAX_FILES = 1000;
+const RUNSHEET_MAX_DEPTH = 4;
+const RUNSHEET_EXTENSIONS = new Set(['.sh', '.bash', '.zsh', '.ksh', '.command', '.ps1', '.psm1', '.psd1', '.py', '.rb',
+  '.js', '.mjs', '.ts', '.json', '.yml', '.yaml', '.sql', '.md', '.markdown', '.txt', '.ini', '.toml']);
+
+// Paths relative to the folder, using / on every OS, sorted. Hidden folders and node_modules are skipped.
+async function listRunsheets(folder) {
+  const found = [];
+  const walk = async (dir, prefix, depth) => {
+    const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (found.length >= RUNSHEET_MAX_FILES || entry.name.startsWith('.')) continue;
+      if (entry.isFile() && RUNSHEET_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) found.push(`${prefix}${entry.name}`);
+      else if (entry.isDirectory() && entry.name !== 'node_modules' && depth < RUNSHEET_MAX_DEPTH) {
+        try { await walk(path.join(dir, entry.name), `${prefix}${entry.name}/`, depth + 1); } catch {} // unreadable subfolder
+      }
+    }
+  };
+  await walk(folder, '', 1);
+  return found.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }));
+}
+
+// PowerShell scripts are often UTF-16, so go by the byte order mark before assuming UTF-8.
+function decodeText(bytes) {
+  let encoding = 'utf-8';
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) encoding = 'utf-16le';
+  else if (bytes[0] === 0xfe && bytes[1] === 0xff) encoding = 'utf-16be';
+  return new TextDecoder(encoding).decode(bytes);
+}
+
+function readRunsheet(file) {
+  const name = path.basename(file);
+  try {
+    if (fs.statSync(file).size > RUNSHEET_MAX_BYTES) return { path: file, name, error: 'it is larger than 2 MB' };
+    const text = decodeText(fs.readFileSync(file));
+    if (text.includes('\0')) return { path: file, name, error: "it doesn't look like a text file" };
+    return { path: file, name, text, baseUrl: pathToFileURL(path.dirname(file) + path.sep).href };
+  } catch (err) {
+    return { path: file, name, error: err.code === 'ENOENT' ? 'the file no longer exists' : err.message };
+  }
+}
+
+const relativeToFolder = (file) => path.relative(settings.runsheetFolder ?? '', file).split(path.sep).join('/');
+const withRelativePath = (sheet) => ({ ...sheet, relative: relativeToFolder(sheet.path) });
+
+ipcMain.handle('runsheet:read', (e) => (fromUi(e) && settings.runsheetPath ? withRelativePath(readRunsheet(settings.runsheetPath)) : null));
+ipcMain.handle('runsheet:list', async (e) => {
+  const folder = settings.runsheetFolder;
+  if (!fromUi(e) || !folder) return { folder: '', files: [] };
+  try {
+    const files = await listRunsheets(folder);
+    return { folder, files, truncated: files.length >= RUNSHEET_MAX_FILES };
+  } catch (err) {
+    return { folder, files: [], error: err.code === 'ENOENT' ? 'this folder no longer exists' : err.message };
+  }
+});
+ipcMain.handle('runsheet:choose-folder', async (e) => {
+  if (!fromUi(e)) return null;
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Runsheet folder', properties: ['openDirectory', 'createDirectory'],
+  });
+  if (canceled || !filePaths[0]) return null;
+  settings.runsheetFolder = filePaths[0];
+  delete settings.runsheetPath;
+  saveSettings();
+  return { folder: filePaths[0] };
+});
+ipcMain.handle('runsheet:open', async (e, relative) => {
+  const folder = settings.runsheetFolder;
+  if (!fromUi(e) || !folder) return null;
+  let files = [];
+  try { files = await listRunsheets(folder); } catch {}
+  if (!files.includes(relative)) return { name: String(relative), error: 'it is no longer in the folder' };
+  const sheet = readRunsheet(path.join(folder, ...relative.split('/')));
+  if (!sheet.error) { settings.runsheetPath = sheet.path; saveSettings(); }
+  return { ...sheet, relative };
+});
+
+// --- Web tab: an ordinary browser for any site, so nothing it does is trusted (ADR 0005) -------
+
+let web = null;
+let webGesture = () => null;
+let webVisible = false;
+let webBounds = null;
+const isWebUrl = (url) => /^https?:\/\//i.test(url);
+
+function originOf(url) {
+  try { return new URL(url).origin; } catch { return ''; }
+}
+const autoRunSites = () => settings.webAutoRunSites ?? [];
+const isAutoRunSite = (url) => autoRunSites().includes(originOf(url));
+
+// Anything that isn't a web address is a search, so file: and javascript: can't be typed in.
+function webTarget(input) {
+  const text = input.trim();
+  if (!text) return null;
+  if (isWebUrl(text)) {
+    try { return new URL(text).href; } catch {}
+  }
+  if (/^localhost(:\d+)?([/?#]|$)/i.test(text)) return `http://${text}`;
+  if (/^[\w-]+(\.[\w-]+)+(:\d+)?([/?#]\S*)?$/.test(text)) return `https://${text}`;
+  return `https://www.google.com/search?q=${encodeURIComponent(text)}`;
+}
+
+function pushWebState() {
+  if (!web) return;
+  const { webContents: c } = web;
+  const url = c.getURL();
+  toUi('web:state', {
+    url,
+    title: c.getTitle(),
+    canGoBack: c.navigationHistory.canGoBack(),
+    canGoForward: c.navigationHistory.canGoForward(),
+    loading: c.isLoading(),
+    canAutoRun: url.startsWith('https://'),
+    autoRun: isAutoRunSite(url),
+  });
+}
+
+function ensureWeb() {
+  if (web) return web;
+  web = new WebContentsView({
+    webPreferences: {
+      partition: 'persist:web',
+      preload: path.join(__dirname, 'chat-preload.js'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  });
+  const { webContents: c } = web;
+  const ua = c.getUserAgent().replace(/ (Electron|airlock-terminal)\/\S+/g, '');
+  c.session.setUserAgent(ua);
+  c.setUserAgent(ua);
+  // Only what copying and video need: no camera, microphone, location or notifications.
+  const allowed = (permission) => permission === 'clipboard-sanitized-write' || permission === 'fullscreen';
+  c.session.setPermissionRequestHandler((_wc, permission, callback) => callback(allowed(permission)));
+  c.session.setPermissionCheckHandler((_wc, permission) => allowed(permission));
+  // Unlike chat downloads, these never land in the terminal's directory: any site can start one.
+  c.session.on('will-download', (_e, item) => {
+    const savePath = uniquePath(app.getPath('downloads'), item.getFilename());
+    item.setSavePath(savePath);
+    item.once('done', (_ev, state) => toUi('download:done', { state, savePath, displayPath: savePath }));
+  });
+  // One page at a time: links that open new windows stay in this tab.
+  c.setWindowOpenHandler(({ url }) => {
+    if (isWebUrl(url)) c.loadURL(url);
+    return { action: 'deny' };
+  });
+  const webOnly = (e, url) => { if (!isWebUrl(url)) e.preventDefault(); };
+  c.on('will-navigate', (e) => webOnly(e, e.url));
+  c.on('will-redirect', (e) => webOnly(e, e.url));
+  const remember = () => {
+    const url = c.getURL();
+    if (isWebUrl(url) && url !== settings.webUrl) { settings.webUrl = url; saveSettings(); }
+    pushWebState();
+  };
+  c.on('did-navigate', remember);
+  c.on('did-navigate-in-page', remember);
+  for (const event of ['did-start-loading', 'did-stop-loading', 'page-title-updated']) c.on(event, pushWebState);
+  c.on('did-fail-load', (_e, code, description, url, isMainFrame) => {
+    if (isMainFrame && code !== -3) toUi('web:error', `${url}: ${description}`); // -3 is a cancelled load
+  });
+  c.on('before-input-event', (e, input) => {
+    if (input.type === 'keyDown' && input.key.toLowerCase() === 'l' && (process.platform === 'darwin' ? input.meta : input.control) && !input.alt && !input.shift) {
+      e.preventDefault();
+      win.webContents.focus();
+      toUi('web:focus-address');
+    }
+  });
+  webGesture = trackCopyGestures(c);
+  win.contentView.addChildView(web);
+  if (webBounds) web.setBounds(webBounds);
+  web.setVisible(webVisible);
+  return web;
+}
+
+// Any site can reach the airlock, but only from a real press in its visible top frame: otherwise a
+// page could quietly replace a command waiting there. Running needs the site turned on as well.
+function receiveWebCopy(e, text) {
+  const gesture = webGesture();
+  if (gesture === null || !webVisible || e.senderFrame !== web.webContents.mainFrame) return;
+  const autoRun = isAutoRunSite(e.senderFrame.url);
+  win.webContents.send('airlock:fill', { text, gesture: autoRun ? `web:${gesture}` : null, autoRunOff: !autoRun });
+}
+
+ipcMain.on('web:bounds', (e, bounds) => {
+  if (!fromUi(e)) return;
+  webBounds = bounds;
+  web?.setBounds(bounds);
+});
+ipcMain.on('web:visible', (e, visible) => {
+  if (!fromUi(e)) return;
+  webVisible = visible === true;
+  // Nothing is loaded until the tab is first used.
+  if (webVisible && !web && settings.webUrl) ensureWeb().webContents.loadURL(settings.webUrl);
+  web?.setVisible(webVisible);
+  pushWebState();
+});
+ipcMain.on('web:go', (e, input) => {
+  const target = fromUi(e) && typeof input === 'string' ? webTarget(input) : null;
+  if (target) ensureWeb().webContents.loadURL(target);
+});
+ipcMain.on('web:back', (e) => { if (fromUi(e)) web?.webContents.navigationHistory.goBack(); });
+ipcMain.on('web:forward', (e) => { if (fromUi(e)) web?.webContents.navigationHistory.goForward(); });
+ipcMain.on('web:reload', (e) => {
+  if (!fromUi(e) || !web) return;
+  if (web.webContents.isLoading()) web.webContents.stop();
+  else web.webContents.reload();
+});
+ipcMain.on('web:external', (e) => {
+  const url = web?.webContents.getURL();
+  if (fromUi(e) && url && isWebUrl(url)) shell.openExternal(url);
+});
+// Applies to whichever https site is really showing; the UI doesn't get to name one.
+ipcMain.handle('web:set-auto-run', (e, enabled) => {
+  const url = web?.webContents.getURL();
+  if (!fromUi(e) || !url?.startsWith('https://')) return autoRunSites();
+  const origin = originOf(url);
+  settings.webAutoRunSites = autoRunSites().filter((s) => s !== origin);
+  if (enabled === true) settings.webAutoRunSites.push(origin);
+  saveSettings();
+  pushWebState();
+  return settings.webAutoRunSites;
+});
+ipcMain.handle('web:remove-auto-run', (e, origin) => {
+  if (!fromUi(e)) return autoRunSites();
+  settings.webAutoRunSites = autoRunSites().filter((s) => s !== origin);
+  saveSettings();
+  pushWebState();
+  return settings.webAutoRunSites;
+});
+
 // --- Saved terminal output: opt-in, because anything printed on screen ends up on disk -------
 
 ipcMain.handle('scrollback:load', (e) => {
@@ -595,6 +878,8 @@ Menu.setApplicationMenu(process.platform === 'darwin'
   : null);
 
 app.whenReady().then(() => {
+  // Packaged builds get their icon from the app bundle.
+  if (process.platform === 'darwin' && !app.isPackaged) app.dock.setIcon(APP_ICON);
   loadSettings();
   applyThemeSource();
   maintainHistory();
