@@ -11,6 +11,7 @@ const TITLEBAR_HEIGHT = 35; // keep in sync with --titlebar-height in style.css
 let win;
 let chat;
 let term;
+let currentShell;
 
 // --- Shells ---------------------------------------------------------------------------------
 // Each shell is launched with the integration script for its kind (ADR 0002). The UI only
@@ -146,7 +147,8 @@ ipcMain.handle('shells:list', (e) => (fromUi(e) ? shells.map(({ id, label }) => 
 ipcMain.on('pty:start', (e, { cols, rows, shellId }) => {
   if (!fromUi(e)) return;
   term?.kill();
-  const { file, args, env } = launchSpec(shells.find((s) => s.id === shellId) ?? shells[0]);
+  currentShell = shells.find((s) => s.id === shellId) ?? shells[0];
+  const { file, args, env } = launchSpec(currentShell);
   const p = pty.spawn(file, args, {
     name: 'xterm-256color', cols, rows, cwd: os.homedir(), env: { ...process.env, ...env },
   });
@@ -156,6 +158,40 @@ ipcMain.on('pty:start', (e, { cols, rows, shellId }) => {
 });
 ipcMain.on('pty:input', (e, data) => { if (fromUi(e)) term?.write(data); });
 ipcMain.on('pty:resize', (e, { cols, rows }) => { if (fromUi(e)) term?.resize(cols, rows); });
+// --- AWS profiles -------------------------------------------------------------------------
+
+// Profile names from the config file the current shell would use.
+function readAwsConfig() {
+  try {
+    if (currentShell?.kind === 'wsl') {
+      return execFileSync('wsl.exe', ['-d', currentShell.distro, '--exec', 'sh', '-c',
+        'cat "${AWS_CONFIG_FILE:-$HOME/.aws/config}"'], { encoding: 'utf8', timeout: 10000 });
+    }
+    return fs.readFileSync(process.env.AWS_CONFIG_FILE || path.join(os.homedir(), '.aws', 'config'), 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function awsProfiles() {
+  const names = [];
+  for (const line of readAwsConfig().split(/\r?\n/)) {
+    const m = line.match(/^\s*\[\s*(?:profile\s+)?([^\]]+?)\s*\]/);
+    // [sso-session x] and [services x] sections aren't profiles.
+    if (m && !/^(sso-session|services)\s/.test(m[1])) names.push(m[1]);
+  }
+  return [...new Set(names)];
+}
+
+const quote = (s) => `'${s.replace(/'/g, currentShell?.kind === 'pwsh' ? "''" : "'\\''")}'`;
+
+ipcMain.handle('aws:profiles', (e) => (fromUi(e) ? awsProfiles() : []));
+// The command that selects a profile in the current shell; the UI sends it to the terminal.
+ipcMain.handle('aws:command', (e, name) => {
+  if (!fromUi(e) || !awsProfiles().includes(name)) return '';
+  return currentShell?.kind === 'pwsh' ? `$env:AWS_PROFILE = ${quote(name)}` : `export AWS_PROFILE=${quote(name)}`;
+});
+
 // Latest working directory reported by the shell integration, as the shell sees it.
 let termCwd = '';
 ipcMain.on('pty:cwd', (e, cwd) => { if (fromUi(e) && typeof cwd === 'string') termCwd = cwd; });

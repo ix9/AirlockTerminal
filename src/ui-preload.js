@@ -15,4 +15,6 @@ contextBridge.exposeInMainWorld('airlock', {
   onPtyData: (cb) => ipcRenderer.on('pty:data', (_e, data) => cb(data)),
   onPtyExit: (cb) => ipcRenderer.on('pty:exit', (_e, code) => cb(code)),
   reportCwd: (cwd) => ipcRenderer.send('pty:cwd', cwd),
+  awsProfiles: () => ipcRenderer.invoke('aws:profiles'),
+  awsCommand: (name) => ipcRenderer.invoke('aws:command', name),
 });

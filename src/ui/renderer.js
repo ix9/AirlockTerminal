@@ -124,6 +124,7 @@ term.parser.registerOscHandler(7337, (data) => {
     const env = parseEnv(b64(envB64 || ''));
     envBaseline ??= env;
     renderEnv(env);
+    showAwsProfile(env.get('AWS_PROFILE') || '');
     window.airlock.reportCwd(cwd);
   } catch {}
   return true; // consumed: never shown in the terminal
@@ -138,8 +139,35 @@ function startShell() {
   $('envbar').hidden = true;
   term.reset();
   window.airlock.ptyStart({ cols: term.cols, rows: term.rows, shellId: shellPicker.value });
+  loadAwsProfiles();
   term.focus();
 }
+
+// Send a command to the terminal as if typed and entered.
+function sendCommand(text) {
+  term.paste(text);
+  window.airlock.ptyInput('\r');
+}
+
+// --- AWS profile picker ------------------------------------------------------------------
+
+const awsPicker = $('aws');
+async function loadAwsProfiles() {
+  const profiles = await window.airlock.awsProfiles();
+  awsPicker.replaceChildren(new Option('AWS profile…', ''), ...profiles.map((p) => new Option(`AWS: ${p}`, p)));
+  awsPicker.hidden = profiles.length === 0;
+}
+// Mirror AWS_PROFILE as reported by the shell, however it was set.
+function showAwsProfile(name) {
+  if ([...awsPicker.options].some((o) => o.value === name)) awsPicker.value = name;
+}
+// ~/.aws/config may have been edited elsewhere.
+window.addEventListener('focus', loadAwsProfiles);
+awsPicker.addEventListener('change', async () => {
+  const cmd = await window.airlock.awsCommand(awsPicker.value);
+  if (cmd) sendCommand(cmd);
+  term.focus();
+});
 window.airlock.listShells().then((shells) => {
   for (const s of shells) shellPicker.add(new Option(s.label, s.id));
   startShell();
@@ -165,8 +193,7 @@ $('clear').addEventListener('click', () => { airlockText.value = ''; airlockText
 function runAirlock() {
   const text = airlockText.value.replace(/\s+$/, '');
   if (!text) return;
-  term.paste(text);
-  window.airlock.ptyInput('\r');
+  sendCommand(text);
   term.focus();
 }
 $('run').addEventListener('click', runAirlock);
