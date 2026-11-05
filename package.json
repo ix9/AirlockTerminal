@@ -6,7 +6,8 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "postinstall": "node -e \"if(process.platform==='darwin')for(const a of['arm64','x64'])require('fs').chmodSync('node_modules/node-pty/prebuilds/darwin-'+a+'/spawn-helper',0o755)\""
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
