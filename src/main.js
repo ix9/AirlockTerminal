@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const { execFileSync } = require('node:child_process');
-const { app, BrowserWindow, WebContentsView, Menu, ipcMain, session, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, nativeTheme, screen, session, shell } = require('electron');
 const pty = require('node-pty');
 
 const CHAT_URL = 'https://claude.ai/';
@@ -10,14 +10,105 @@ const TITLEBAR_HEIGHT = 35; // keep in sync with --titlebar-height in style.css
 
 let win;
 let chat;
-let term;
-let currentShell;
+
+// One entry per terminal tab, keyed by the id the UI gave it: { pty, shell, cwd, exited }.
+const terminals = new Map();
+let activeId = null;
+const activeTerminal = () => terminals.get(activeId);
+const toUi = (channel, ...args) => { if (win && !win.isDestroyed()) win.webContents.send(channel, ...args); };
+
+// --- Data files and settings ----------------------------------------------------------------
+
+const dataFile = (name) => path.join(app.getPath('userData'), name);
+
+// Replaced in one step, so a crash can't leave half a file.
+function writeFileAtomic(file, text, options) {
+  fs.writeFileSync(`${file}.tmp`, text, options);
+  fs.renameSync(`${file}.tmp`, file);
+}
+
+const THEMES = {
+  dark: { background: '#181818', symbols: '#cccccc' },
+  light: { background: '#f8f8f8', symbols: '#3b3b3b' },
+  contrast: { background: '#000000', symbols: '#ffffff' },
+};
+
+const isPercent = (v) => Number.isFinite(v) && v > 0 && v < 100;
+// What the UI may change. The window and snippets folder are set only by this process.
+const SETTING_RULES = {
+  theme: (v) => v === 'system' || Object.hasOwn(THEMES, v),
+  fontSize: (v) => Number.isFinite(v) && v >= 8 && v <= 32,
+  lastShell: (v) => typeof v === 'string',
+  leftWidth: isPercent,
+  airlockHeight: isPercent,
+  scratchLeft: isPercent,
+  saveScrollback: (v) => typeof v === 'boolean',
+};
+
+let settings = { theme: 'dark' };
+let settingsTimer = null;
+
+function loadSettings() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(dataFile('settings.json'), 'utf8'));
+    for (const [key, valid] of Object.entries(SETTING_RULES)) if (valid(raw[key])) settings[key] = raw[key];
+    if (typeof raw.snippetsDir === 'string') settings.snippetsDir = raw.snippetsDir;
+    const w = raw.window;
+    if (w && [w.x, w.y, w.width, w.height].every(Number.isFinite)) settings.window = { ...w, maximized: w.maximized === true };
+  } catch {} // no file yet, or unreadable: defaults
+}
+
+function flushSettings() {
+  clearTimeout(settingsTimer);
+  settingsTimer = null;
+  try { writeFileAtomic(dataFile('settings.json'), `${JSON.stringify(settings, null, 2)}\n`); } catch {}
+}
+function saveSettings() {
+  clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(flushSettings, 300);
+}
+
+// A saved position is only used if it's still on a connected screen.
+function initialBounds() {
+  const w = settings.window;
+  if (!w) return { width: 1600, height: 900 };
+  const size = { width: w.width, height: w.height };
+  const visible = screen.getAllDisplays().some(({ workArea: a }) =>
+    w.x < a.x + a.width && w.x + w.width > a.x && w.y < a.y + a.height && w.y + w.height > a.y);
+  return visible ? { x: w.x, y: w.y, ...size } : size;
+}
+
+function rememberWindow() {
+  if (!win || win.isDestroyed() || win.isMinimized()) return;
+  settings.window = { ...win.getNormalBounds(), maximized: win.isMaximized() };
+  saveSettings();
+}
+
+// --- Themes: the renderer styles itself; this covers what only this process can reach --------
+
+const resolvedTheme = () => (settings.theme === 'system' ? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light') : settings.theme);
+
+// Also what claude.ai sees as prefers-color-scheme, so the chat follows the app.
+function applyThemeSource() {
+  nativeTheme.themeSource = settings.theme === 'system' ? 'system' : settings.theme === 'light' ? 'light' : 'dark';
+}
+
+function pushTheme() {
+  if (!win || win.isDestroyed()) return;
+  const theme = resolvedTheme();
+  const { background, symbols } = THEMES[theme];
+  win.setBackgroundColor(background);
+  if (process.platform !== 'darwin') win.setTitleBarOverlay({ color: background, symbolColor: symbols, height: TITLEBAR_HEIGHT });
+  toUi('theme:changed', theme);
+}
+nativeTheme.on('updated', pushTheme);
 
 // --- Shells ---------------------------------------------------------------------------------
 // Each shell is launched with the integration script for its kind (ADR 0002). The UI only
 // ever sends back an id from this list.
 
-const INTEGRATION_DIR = path.join(__dirname, 'shell-integration');
+// Shells can't read inside the asar archive, so packaged builds keep these scripts beside it.
+const INTEGRATION_DIR = path.join(__dirname, 'shell-integration').replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
 
 function listShells() {
   const shells = [];
@@ -78,15 +169,15 @@ function launchSpec(s) {
 }
 
 function createWindow() {
+  const { background, symbols } = THEMES[resolvedTheme()];
   win = new BrowserWindow({
-    width: 1600,
-    height: 900,
+    ...initialBounds(),
     title: 'Airlock Terminal',
-    backgroundColor: '#181818',
+    backgroundColor: background,
     // VS Code-style: our own title bar; the OS draws only the window buttons over it.
     titleBarStyle: 'hidden',
     ...(process.platform !== 'darwin' && {
-      titleBarOverlay: { color: '#181818', symbolColor: '#cccccc', height: TITLEBAR_HEIGHT },
+      titleBarOverlay: { color: background, symbolColor: symbols, height: TITLEBAR_HEIGHT },
     }),
     trafficLightPosition: { x: 12, y: 10 },
     webPreferences: {
@@ -96,7 +187,9 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
-  win.maximize();
+  if (!settings.window || settings.window.maximized) win.maximize();
+  for (const event of ['resize', 'move', 'maximize', 'unmaximize']) win.on(event, rememberWindow);
+  win.on('close', () => { rememberWindow(); flushSettings(); });
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
 
   // Chat pane: an external site in its own persistent session, laid over the UI's placeholder.
@@ -152,27 +245,65 @@ const fromUi = (e) => e.sender === win?.webContents;
 
 ipcMain.handle('shells:list', (e) => (fromUi(e) ? shells.map(({ id, label }) => ({ id, label })) : []));
 
-ipcMain.on('pty:start', (e, { cols, rows, shellId }) => {
-  if (!fromUi(e)) return;
-  term?.kill();
-  currentShell = shells.find((s) => s.id === shellId) ?? shells[0];
-  const { file, args, env } = launchSpec(currentShell);
+ipcMain.on('pty:start', (e, { id, cols, rows, shellId }) => {
+  if (!fromUi(e) || !Number.isInteger(id)) return;
+  terminals.get(id)?.pty.kill();
+  const shellEntry = shells.find((s) => s.id === shellId) ?? shells[0];
+  const { file, args, env } = launchSpec(shellEntry);
   const p = pty.spawn(file, args, {
     name: 'xterm-256color', cols, rows, cwd: os.homedir(), env: { ...process.env, ...env },
   });
-  p.onData((data) => win.webContents.send('pty:data', data));
-  p.onExit(({ exitCode }) => { if (term === p) win.webContents.send('pty:exit', exitCode); });
-  term = p;
+  const entry = { pty: p, shell: shellEntry, cwd: '', exited: false };
+  terminals.set(id, entry);
+  // A restarted tab's old shell may still be finishing; only the current one reaches the UI.
+  p.onData((data) => { if (terminals.get(id) === entry) toUi('pty:data', id, data); });
+  p.onExit(({ exitCode }) => {
+    entry.exited = true;
+    if (terminals.get(id) === entry) toUi('pty:exit', id, exitCode);
+  });
 });
-ipcMain.on('pty:input', (e, data) => { if (fromUi(e)) term?.write(data); });
-ipcMain.on('pty:resize', (e, { cols, rows }) => { if (fromUi(e)) term?.resize(cols, rows); });
+ipcMain.on('pty:input', (e, id, data) => {
+  const t = terminals.get(id);
+  if (fromUi(e) && t && !t.exited) t.pty.write(data);
+});
+ipcMain.on('pty:resize', (e, id, { cols, rows }) => {
+  const t = terminals.get(id);
+  if (fromUi(e) && t && !t.exited) t.pty.resize(cols, rows);
+});
+// Downloads, saves and AWS commands follow this tab.
+ipcMain.on('pty:activate', (e, id) => { if (fromUi(e)) activeId = id; });
+ipcMain.on('pty:close', (e, id) => {
+  if (!fromUi(e)) return;
+  terminals.get(id)?.pty.kill();
+  terminals.delete(id);
+});
+
+// What's running in the terminal besides its shell. Windows and WSL can't tell us, so there the
+// answer is always "something might be".
+function foregroundProcess(t) {
+  if (t.exited) return null;
+  if (process.platform === 'win32') return 'A command may still be running.';
+  const name = (t.pty.process || '').split('/').pop().replace(/^-/, '');
+  return name && name !== t.shell.file.split('/').pop() ? `"${name}" is still running.` : null;
+}
+ipcMain.handle('pty:confirm-close', async (e, id) => {
+  const t = terminals.get(id);
+  if (!fromUi(e) || !t) return true;
+  const detail = foregroundProcess(t);
+  if (!detail) return true;
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'warning', message: 'Close this terminal?', detail, buttons: ['Close Terminal', 'Cancel'], defaultId: 1, cancelId: 1,
+  });
+  return response === 0;
+});
+
 // --- AWS profiles -------------------------------------------------------------------------
 
-// Profile names from the config file the current shell would use.
-function readAwsConfig() {
+// Profile names from the config file this tab's shell would use.
+function readAwsConfig(shellEntry) {
   try {
-    if (currentShell?.kind === 'wsl') {
-      return execFileSync('wsl.exe', ['-d', currentShell.distro, '--exec', 'sh', '-c',
+    if (shellEntry?.kind === 'wsl') {
+      return execFileSync('wsl.exe', ['-d', shellEntry.distro, '--exec', 'sh', '-c',
         'cat "${AWS_CONFIG_FILE:-$HOME/.aws/config}"'], { encoding: 'utf8', timeout: 10000 });
     }
     return fs.readFileSync(process.env.AWS_CONFIG_FILE || path.join(os.homedir(), '.aws', 'config'), 'utf8');
@@ -181,9 +312,9 @@ function readAwsConfig() {
   }
 }
 
-function awsProfiles() {
+function awsProfiles(shellEntry) {
   const names = [];
-  for (const line of readAwsConfig().split(/\r?\n/)) {
+  for (const line of readAwsConfig(shellEntry).split(/\r?\n/)) {
     const m = line.match(/^\s*\[\s*(?:profile\s+)?([^\]]+?)\s*\]/);
     // [sso-session x] and [services x] sections aren't profiles.
     if (m && !/^(sso-session|services)\s/.test(m[1])) names.push(m[1]);
@@ -191,18 +322,21 @@ function awsProfiles() {
   return [...new Set(names)];
 }
 
-const quote = (s) => `'${s.replace(/'/g, currentShell?.kind === 'pwsh' ? "''" : "'\\''")}'`;
+const quote = (s, kind) => `'${s.replace(/'/g, kind === 'pwsh' ? "''" : "'\\''")}'`;
 
-ipcMain.handle('aws:profiles', (e) => (fromUi(e) ? awsProfiles() : []));
-// The command that selects a profile in the current shell; the UI sends it to the terminal.
-ipcMain.handle('aws:command', (e, name) => {
-  if (!fromUi(e) || !awsProfiles().includes(name)) return '';
-  return currentShell?.kind === 'pwsh' ? `$env:AWS_PROFILE = ${quote(name)}` : `export AWS_PROFILE=${quote(name)}`;
+ipcMain.handle('aws:profiles', (e, id) => (fromUi(e) ? awsProfiles(terminals.get(id)?.shell) : []));
+// The command that selects a profile in that tab's shell; the UI sends it to the terminal.
+ipcMain.handle('aws:command', (e, id, name) => {
+  const shellEntry = terminals.get(id)?.shell;
+  if (!fromUi(e) || !awsProfiles(shellEntry).includes(name)) return '';
+  return shellEntry?.kind === 'pwsh' ? `$env:AWS_PROFILE = ${quote(name, 'pwsh')}` : `export AWS_PROFILE=${quote(name)}`;
 });
 
-// Latest working directory reported by the shell integration, as the shell sees it.
-let termCwd = '';
-ipcMain.on('pty:cwd', (e, cwd) => { if (fromUi(e) && typeof cwd === 'string') termCwd = cwd; });
+// Latest working directory reported by each tab's shell integration, as the shell sees it.
+ipcMain.on('pty:cwd', (e, id, cwd) => {
+  const t = terminals.get(id);
+  if (fromUi(e) && t && typeof cwd === 'string') t.cwd = cwd;
+});
 
 // --- Claude usage (unofficial: the endpoint claude.ai's Usage page uses, ADR 0003) --------
 
@@ -236,29 +370,103 @@ async function refreshUsage(force = false) {
 }
 ipcMain.on('usage:refresh', (e) => { if (fromUi(e)) refreshUsage(true); });
 
-// --- Snippets and airlock history (plain files in the app's user data folder) -----------
+// --- Settings, as seen by the UI -------------------------------------------------------------
 
-const dataFile = (name) => path.join(app.getPath('userData'), name);
-const HISTORY_LIMIT = 500;
-
-function readSnippets() {
-  try {
-    const list = JSON.parse(fs.readFileSync(dataFile('snippets.json'), 'utf8'));
-    return Array.isArray(list) ? list.filter((s) => typeof s?.name === 'string' && typeof s?.command === 'string') : [];
-  } catch {
-    return [];
+// Synchronous so the first paint already has the right theme and layout.
+ipcMain.on('settings:initial', (e) => {
+  const { window: _ignored, ...rest } = settings;
+  e.returnValue = fromUi(e) ? { settings: rest, theme: resolvedTheme(), dataDir: app.getPath('userData') } : null;
+});
+ipcMain.on('settings:set', (e, patch) => {
+  if (!fromUi(e) || !patch) return;
+  for (const [key, valid] of Object.entries(SETTING_RULES)) {
+    if (Object.hasOwn(patch, key) && valid(patch[key])) settings[key] = patch[key];
   }
-}
+  if (patch.theme) { applyThemeSource(); pushTheme(); }
+  if (patch.saveScrollback === false) fs.rm(dataFile('scrollback.json'), { force: true }, () => {});
+  saveSettings();
+});
+ipcMain.on('data:open', (e) => { if (fromUi(e)) shell.openPath(app.getPath('userData')); });
 
-ipcMain.handle('snippets:list', (e) => (fromUi(e) ? readSnippets() : []));
+// --- Snippets (a plain file, in a folder the user can choose so it can be synced) ------------
+
+const snippetsFile = () => path.join(settings.snippetsDir || app.getPath('userData'), 'snippets.json');
+
+// Throws if the file exists but can't be used, so a sync conflict is reported and never saved over.
+function readSnippets() {
+  if (settings.snippetsDir && !fs.statSync(settings.snippetsDir).isDirectory()) throw new Error('not a folder');
+  let raw;
+  try {
+    raw = fs.readFileSync(snippetsFile(), 'utf8');
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+  const list = JSON.parse(raw);
+  if (!Array.isArray(list)) throw new Error('not a list of snippets');
+  return list.filter((s) => typeof s?.name === 'string' && typeof s?.command === 'string');
+}
+function writeSnippets(list) {
+  writeFileAtomic(snippetsFile(), `${JSON.stringify(list, null, 2)}\n`);
+}
+const snippetsError = (err) => `Can't use ${snippetsFile()}: ${err.message}`;
+
+ipcMain.handle('snippets:list', (e) => {
+  if (!fromUi(e)) return { list: [] };
+  try {
+    return { list: readSnippets() };
+  } catch (err) {
+    return { list: [], error: snippetsError(err) };
+  }
+});
 ipcMain.handle('snippets:save', (e, list) => {
-  if (!fromUi(e) || !Array.isArray(list)) return false;
+  if (!fromUi(e) || !Array.isArray(list)) return { error: 'bad request' };
   const clean = list
     .filter((s) => typeof s?.name === 'string' && typeof s?.command === 'string')
     .map(({ name, command }) => ({ name, command }));
-  fs.writeFileSync(dataFile('snippets.json'), `${JSON.stringify(clean, null, 2)}\n`);
-  return true;
+  try {
+    readSnippets();
+    writeSnippets(clean);
+    return {};
+  } catch (err) {
+    return { error: snippetsError(err) };
+  }
 });
+// A folder that already has snippets is used as it is; an empty one gets a copy of the current list.
+ipcMain.handle('snippets:choose-folder', async (e) => {
+  if (!fromUi(e)) return null;
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Snippets folder', properties: ['openDirectory', 'createDirectory'],
+  });
+  if (canceled || !filePaths[0]) return null;
+  let current = [];
+  try { current = readSnippets(); } catch {}
+  settings.snippetsDir = filePaths[0];
+  saveSettings();
+  try {
+    if (!fs.existsSync(snippetsFile())) writeSnippets(current);
+  } catch (err) {
+    return { dir: filePaths[0], error: snippetsError(err) };
+  }
+  return { dir: filePaths[0] };
+});
+ipcMain.handle('snippets:reset-folder', (e) => {
+  if (fromUi(e)) { delete settings.snippetsDir; saveSettings(); }
+});
+
+// --- Airlock history: local only, private, and trimmed each time the app starts --------------
+
+const HISTORY_LIMIT = 500;
+const PRIVATE_FILE = { mode: 0o600 };
+
+function maintainHistory() {
+  const file = dataFile('history.jsonl');
+  try {
+    fs.chmodSync(file, 0o600); // files from older versions were readable by other users
+    const lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+    if (lines.length > HISTORY_LIMIT) writeFileAtomic(file, `${lines.slice(-HISTORY_LIMIT).join('\n')}\n`, PRIVATE_FILE);
+  } catch {} // no history yet
+}
 
 ipcMain.handle('history:list', (e) => {
   if (!fromUi(e)) return [];
@@ -271,19 +479,35 @@ ipcMain.handle('history:list', (e) => {
 });
 ipcMain.on('history:add', (e, command) => {
   if (!fromUi(e) || typeof command !== 'string' || !command.trim()) return;
-  const entry = { ts: new Date().toISOString(), shell: currentShell?.id ?? '', command };
-  fs.appendFile(dataFile('history.jsonl'), `${JSON.stringify(entry)}\n`, () => {});
+  const entry = { ts: new Date().toISOString(), shell: activeTerminal()?.shell.id ?? '', command };
+  fs.appendFile(dataFile('history.jsonl'), `${JSON.stringify(entry)}\n`, PRIVATE_FILE, () => {});
+});
+
+// --- Saved terminal output: opt-in, because anything printed on screen ends up on disk -------
+
+ipcMain.handle('scrollback:load', (e) => {
+  if (!fromUi(e) || !settings.saveScrollback) return [];
+  try {
+    const { tabs } = JSON.parse(fs.readFileSync(dataFile('scrollback.json'), 'utf8'));
+    return tabs.filter((t) => typeof t?.shellId === 'string' && typeof t?.data === 'string');
+  } catch {
+    return [];
+  }
+});
+// Synchronous so the last save finishes during quit.
+ipcMain.on('scrollback:save', (e, tabs) => {
+  if (!fromUi(e) || !settings.saveScrollback || !Array.isArray(tabs)) return;
+  try { writeFileAtomic(dataFile('scrollback.json'), JSON.stringify({ tabs }), PRIVATE_FILE); } catch {}
 });
 
 // --- Downloads from the chat land in the terminal's current directory -------------------
 
-// The terminal's cwd as a path this (host) process can write to.
-function hostCwd() {
-  if (!termCwd) return '';
-  if (currentShell?.kind !== 'wsl') return termCwd;
-  const mnt = termCwd.match(/^\/mnt\/([a-z])(\/.*)?$/i);
+// A terminal's cwd as a path this (host) process can write to.
+function hostCwd({ cwd, shell: shellEntry }) {
+  if (!cwd || shellEntry.kind !== 'wsl') return cwd;
+  const mnt = cwd.match(/^\/mnt\/([a-z])(\/.*)?$/i);
   if (mnt) return `${mnt[1].toUpperCase()}:${(mnt[2] || '/').replace(/\//g, '\\')}`;
-  return `\\\\wsl.localhost\\${currentShell.distro}${termCwd.replace(/\//g, '\\')}`;
+  return `\\\\wsl.localhost\\${shellEntry.distro}${cwd.replace(/\//g, '\\')}`;
 }
 
 function uniquePath(dir, filename) {
@@ -293,31 +517,91 @@ function uniquePath(dir, filename) {
   return candidate;
 }
 
+// Where a new file goes: the active terminal's cwd if it's known and exists, else Downloads.
+// Captured up front so a slow download still reports the right path after a tab switch.
+function saveTarget() {
+  const t = activeTerminal();
+  let dir = t ? hostCwd(t) : '';
+  try { if (!dir || !fs.statSync(dir).isDirectory()) dir = ''; } catch { dir = ''; }
+  return {
+    dir: dir || app.getPath('downloads'),
+    // A saved path as the shell would write it, when it's inside the cwd.
+    shown: (savePath) => (dir ? savePath.replace(dir, () => t.cwd).replace(/\\/g, t.shell.kind === 'wsl' ? '/' : '\\') : savePath),
+  };
+}
+
 function handleDownloads() {
   session.fromPartition('persist:chat').on('will-download', (_e, item) => {
-    let dir = hostCwd();
-    try { if (!dir || !fs.statSync(dir).isDirectory()) dir = ''; } catch { dir = ''; }
-    const savePath = uniquePath(dir || app.getPath('downloads'), item.getFilename());
+    const target = saveTarget();
+    const savePath = uniquePath(target.dir, item.getFilename());
     item.setSavePath(savePath);
     item.once('done', (_ev, state) => {
       // Windows' "downloaded from the internet" marker is an NTFS stream; on a WSL filesystem
       // it shows up as a stray "<file>:Zone.Identifier" file instead, so drop it there.
       if (savePath.startsWith('\\\\wsl')) fs.rm(`${savePath}:Zone.Identifier`, { force: true }, () => {});
-      win?.webContents.send('download:done', {
-        state, savePath, displayPath: dir ? savePath.replace(dir, termCwd).replace(/\\/g, currentShell?.kind === 'wsl' ? '/' : '\\') : savePath,
-      });
+      toUi('download:done', { state, savePath, displayPath: target.shown(savePath) });
     });
   });
 }
 
+// --- Scratchpad: panes kept between sessions ----------------------------------------------
+
+ipcMain.handle('scratch:load', (e) => {
+  const empty = { a: '', b: '', split: false };
+  if (!fromUi(e)) return empty;
+  try {
+    const { a, b, split } = JSON.parse(fs.readFileSync(dataFile('scratchpad.json'), 'utf8'));
+    return { a: typeof a === 'string' ? a : '', b: typeof b === 'string' ? b : '', split: split === true };
+  } catch {
+    return empty;
+  }
+});
+// Synchronous so the last save finishes during quit. Readable only by this user because pasted
+// text may include secrets.
+ipcMain.on('scratch:state', (e, { a, b, split }) => {
+  if (!fromUi(e) || typeof a !== 'string' || typeof b !== 'string') return;
+  try {
+    writeFileAtomic(dataFile('scratchpad.json'), JSON.stringify({ a, b, split: split === true }), PRIVATE_FILE);
+  } catch {}
+});
+
+// --- Scratchpad: save as a text file, in the same place downloads go ---------------------
+
+ipcMain.handle('scratch:save', async (e, file) => {
+  if (!fromUi(e) || typeof file?.name !== 'string' || typeof file?.text !== 'string') return { error: 'bad request' };
+  let name = file.name.trim();
+  // A file name, not a path: nothing here can write outside the directory.
+  if (!name || name === '.' || name === '..' || /[\\/:*?"<>|\x00-\x1f]/.test(name)) {
+    return { error: `"${name}" isn't a valid file name` };
+  }
+  if (!path.extname(name)) name += '.txt';
+  const target = saveTarget();
+  const savePath = uniquePath(target.dir, name);
+  try {
+    await fs.promises.writeFile(savePath, file.text, { flag: 'wx' }); // never overwrite
+  } catch (err) {
+    return { error: err.message };
+  }
+  return { displayPath: target.shown(savePath) };
+});
+
 // No default menu: its zoom accelerators would zoom the whole window instead of the terminal.
-// macOS still needs the app and Edit menus for Cmd+Q / Cmd+C / Cmd+V to work.
+// macOS still needs the app and Edit menus for Cmd+Q / Cmd+C / Cmd+V to work. The Window menu
+// leaves out Close because Cmd+W closes the terminal tab.
 Menu.setApplicationMenu(process.platform === 'darwin'
-  ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, { role: 'windowMenu' }])
+  ? Menu.buildFromTemplate([{ role: 'appMenu' }, { role: 'editMenu' }, {
+    label: 'Window', role: 'window', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' }],
+  }])
   : null);
 
 app.whenReady().then(() => {
+  loadSettings();
+  applyThemeSource();
+  maintainHistory();
   handleDownloads();
   createWindow();
 });
-app.on('window-all-closed', () => { term?.kill(); app.quit(); });
+app.on('window-all-closed', () => {
+  for (const t of terminals.values()) t.pty.kill();
+  app.quit();
+});

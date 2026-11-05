@@ -41,7 +41,7 @@ in bash, `$parameters` in zsh, `[Environment]` in PowerShell). That avoids depen
 - Other shells run without integration: no env panel and downloads fall back to the
   Downloads folder.
 
-The renderer registers an xterm.js OSC handler for `7337`, which hides the sequence from the
+The renderer registers an xterm.js OSC handler for `7337` on each terminal, which hides the sequence from the
 display. It diffs each env snapshot against the first one, ignoring noisy variables (`PWD`,
 `OLDPWD`, `_`, `SHLVL`, prompt-theme internals). Values whose names look secret (`*SECRET*`,
 `*TOKEN*`, `*PASSWORD*`, `*KEY*` except `AWS_PROFILE`/`AWS_REGION`) are masked in the panel.

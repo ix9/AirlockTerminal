@@ -7,13 +7,77 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "postinstall": "node -e \"if(process.platform==='darwin')for(const a of['arm64','x64'])require('fs').chmodSync('node_modules/node-pty/prebuilds/darwin-'+a+'/spawn-helper',0o755)\""
+    "postinstall": "node -e \"if(process.platform==='darwin')for(const a of['arm64','x64'])require('fs').chmodSync('node_modules/node-pty/prebuilds/darwin-'+a+'/spawn-helper',0o755)\"",
+    "dist": "electron-builder"
   },
   "dependencies": {
     "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-serialize": "0.14.0",
     "@xterm/addon-web-links": "0.12.0",
     "@xterm/xterm": "6.0.0",
-    "electron": "45.2.3",
     "node-pty": "1.1.0"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0"
+  },
+  "repository": "github:ix9/AirlockTerminal",
+  "build": {
+    "appId": "io.github.ix9.airlockterminal",
+    "productName": "Airlock Terminal",
+    "artifactName": "AirlockTerminal-${version}-${os}-${arch}.${ext}",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "src/shell-integration/**",
+      "node_modules/node-pty/**"
+    ],
+    "npmRebuild": false,
+    "publish": {
+      "provider": "github",
+      "releaseType": "draft"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "identity": "-",
+      "hardenedRuntime": false
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Development"
+    }
   }
 }

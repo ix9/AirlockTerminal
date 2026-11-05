@@ -16,9 +16,22 @@ npm install
 npm start
 ```
 
+The first `npm start` downloads Electron, because Electron's npm package fetches its binary on
+first use rather than during `npm install`.
+
+## Installers
+`npm run dist` builds an installer for the current OS in `dist/`. Pushing a `v*` tag builds all
+three on GitHub Actions and attaches them to a draft release.
+
+Builds are unsigned, so each OS warns on first launch:
+- **macOS:** the build is ad-hoc signed, so downloaded copies get blocked. Open the app once from
+  **System Settings > Privacy & Security > Open Anyway**.
+- **Windows:** in the SmartScreen prompt, choose **More info > Run anyway**.
+
 ## Docs
 - [Objective](docs/OBJECTIVE.md)
 - [ADR 0001: Electron + node-pty + xterm.js](docs/adr/0001-electron-node-pty-xterm.md)
+- [ADR 0004: Terminal tabs and saved state](docs/adr/0004-tabs-and-saved-state.md)
 - [Dependencies](docs/DEPENDENCIES.md)
 
 ## Licence

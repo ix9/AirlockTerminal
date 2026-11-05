@@ -16,6 +16,13 @@
   </header>
   <main id="app">
     <section id="left">
+      <nav id="view-tabs" class="tabs">
+        <div id="terminal-tabs"></div>
+        <button id="new-tab" class="tab" title="New terminal (Cmd+T on macOS, Ctrl+Shift+T elsewhere)">+</button>
+        <span class="spacer"></span>
+        <button id="tab-scratchpad" class="tab" title="Show or hide the scratchpad">Scratchpad</button>
+        <button id="tab-settings" class="tab" title="Show or hide settings">Settings</button>
+      </nav>
       <header id="toolbar">
         <select id="shell" title="Shell"></select>
         <button id="restart" title="Restart the shell">Restart</button>
@@ -26,6 +33,54 @@
       <div id="envbar" hidden></div>
       <div id="terminal-wrap">
         <div id="terminal"></div>
+        <div id="scratchpad" hidden>
+          <div id="scratch-panes">
+            <div id="scratch-split" class="splitter"></div>
+          </div>
+          <div id="scratch-compare" hidden>
+            <header class="pad-bar">
+              <span id="compare-summary" class="section-title"></span>
+              <button id="compare-close">Back to editing</button>
+            </header>
+            <div id="compare-rows"></div>
+          </div>
+        </div>
+        <div id="settings" hidden>
+          <section>
+            <h2>Appearance</h2>
+            <label class="row">Theme
+              <select id="setting-theme">
+                <option value="system">Follow system</option>
+                <option value="dark">Dark Modern</option>
+                <option value="light">Light Modern</option>
+                <option value="contrast">High contrast</option>
+              </select>
+            </label>
+            <p class="hint">The chat pane follows along when claude.ai's own appearance setting is on Auto.</p>
+          </section>
+          <section>
+            <h2>Terminal output</h2>
+            <label class="row"><input id="setting-scrollback" type="checkbox"> Save terminal tabs and their output between sessions</label>
+            <p class="hint">Keeps up to 5,000 lines per tab in a file only your account can read. Anything printed
+              on screen, including secrets, is written to disk. Turning this off deletes the file.</p>
+          </section>
+          <section>
+            <h2>Snippets folder</h2>
+            <div class="row"><code id="snippets-dir"></code></div>
+            <div class="row">
+              <button id="snippets-choose">Choose…</button>
+              <button id="snippets-reset">Use default</button>
+            </div>
+            <p class="hint">Choose a git or synced folder to share snippets between machines. If two machines edit
+              at the same time, the last save wins. History and the scratchpad always stay on this machine.</p>
+          </section>
+          <section>
+            <h2>Data folder</h2>
+            <div class="row"><code id="data-dir"></code></div>
+            <div class="row"><button id="data-open">Open</button></div>
+            <p class="hint">Holds settings, history, the scratchpad and saved terminal output.</p>
+          </section>
+        </div>
         <div id="toasts"></div>
       </div>
       <div id="hsplit" class="splitter"></div>
@@ -59,9 +114,30 @@
     <div id="vsplit" class="splitter"></div>
     <section id="chat"></section>
   </main>
+  <template id="pad-template">
+    <section class="pad">
+      <header class="pad-bar">
+        <button class="execute primary" title="Run the highlighted text in the terminal (Ctrl+Enter)">Execute ⏎</button>
+        <button class="save" title="Save as a text file in the terminal's current directory">Save</button>
+        <form class="save-form" hidden>
+          <input class="save-name" aria-label="File name" spellcheck="false" required>
+          <button type="submit">Save</button>
+          <button type="button" class="save-cancel">Cancel</button>
+        </form>
+        <button class="split single-only" title="Split the scratchpad into two panes">Split</button>
+        <button class="compare split-only" title="Compare the two panes">Compare</button>
+        <span class="spacer"></span>
+        <button class="close split-only" title="Close this pane. Its text comes back on the next Split.">×</button>
+      </header>
+      <textarea spellcheck="false" placeholder="Put long snippets here. Highlight text and press Execute to run it."></textarea>
+    </section>
+  </template>
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="../../node_modules/@xterm/addon-serialize/lib/addon-serialize.js"></script>
+  <script src="themes.js"></script>
+  <script src="diff.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
