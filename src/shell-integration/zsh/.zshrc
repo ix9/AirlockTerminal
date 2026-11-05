@@ -1,4 +1,6 @@
 ZDOTDIR="$AIRLOCK_USER_ZDOTDIR"
+# macOS's /etc/zshrc has already aimed HISTFILE at this folder; point it at the user's instead.
+[[ "$HISTFILE" == "$__airlock_dir"/* ]] && HISTFILE="$ZDOTDIR/${HISTFILE:t}"
 [[ -r "$ZDOTDIR/.zshrc" ]] && source "$ZDOTDIR/.zshrc"
 AIRLOCK_USER_ZDOTDIR="$ZDOTDIR"
 ZDOTDIR="$__airlock_dir"
