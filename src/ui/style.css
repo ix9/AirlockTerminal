@@ -1,5 +1,6 @@
 :root {
   --titlebar-height: 35px; /* keep in sync with TITLEBAR_HEIGHT in main.js */
+  --radius: 6px;
   --left-width: 50%;
   --airlock-height: 240px;
   --scratch-left: 50%;
@@ -28,6 +29,14 @@
   --diff-del-strong: rgba(241, 76, 76, 0.4);
   --diff-add: rgba(46, 160, 67, 0.13);
   --diff-add-strong: rgba(46, 160, 67, 0.4);
+  --band: rgba(255, 255, 255, 0.05);
+  --syn-comment: #6a9955;
+  --syn-keyword: #c586c0;
+  --syn-string: #ce9178;
+  --syn-number: #b5cea8;
+  --syn-title: #dcdcaa;
+  --syn-type: #4ec9b0;
+  --syn-variable: #9cdcfe;
 }
 
 /* VS Code "Light Modern" */
@@ -54,6 +63,14 @@
   --diff-del-strong: rgba(199, 46, 15, 0.3);
   --diff-add: rgba(46, 160, 67, 0.12);
   --diff-add-strong: rgba(46, 160, 67, 0.35);
+  --band: rgba(0, 0, 0, 0.04);
+  --syn-comment: #008000;
+  --syn-keyword: #af00db;
+  --syn-string: #a31515;
+  --syn-number: #098658;
+  --syn-title: #795e26;
+  --syn-type: #267f99;
+  --syn-variable: #001080;
 }
 
 /* VS Code "Dark High Contrast" */
@@ -80,6 +97,82 @@
   --diff-del-strong: rgba(255, 80, 80, 0.65);
   --diff-add: rgba(60, 220, 90, 0.25);
   --diff-add-strong: rgba(60, 220, 90, 0.6);
+  --band: rgba(255, 255, 255, 0.14);
+  --syn-comment: #7ca668;
+  --syn-keyword: #c586c0;
+  --syn-string: #ce9178;
+  --syn-number: #b5cea8;
+  --syn-title: #dcdcaa;
+  --syn-type: #4ec9b0;
+  --syn-variable: #9cdcfe;
+}
+
+/* VS Code "Monokai" */
+:root[data-theme="monokai"] {
+  color-scheme: dark;
+  --bg: #272822;
+  --panel: #1e1f1c;
+  --input: #414339;
+  --hover: #55574b;
+  --list-hover: #3e3d32;
+  --border: #34352f;
+  --control-border: transparent;
+  --text: #f8f8f2;
+  --muted: #ccccc7;
+  --dim: #88846f;
+  --accent: #75715e;
+  --accent-hover: #8a8570;
+  --focus: #99947c;
+  --warn: #e2e22e;
+  --error: #f92672;
+  --env-key: #66d9ef;
+  --shadow: rgba(0, 0, 0, 0.5);
+  --diff-del: rgba(249, 38, 114, 0.15);
+  --diff-del-strong: rgba(249, 38, 114, 0.4);
+  --diff-add: rgba(166, 226, 46, 0.12);
+  --diff-add-strong: rgba(166, 226, 46, 0.32);
+  --band: rgba(255, 255, 255, 0.05);
+  --syn-comment: #88846f;
+  --syn-keyword: #f92672;
+  --syn-string: #e6db74;
+  --syn-number: #ae81ff;
+  --syn-title: #a6e22e;
+  --syn-type: #66d9ef;
+  --syn-variable: #fd971f;
+}
+
+/* Oceanic Next palette */
+:root[data-theme="oceanic"] {
+  color-scheme: dark;
+  --bg: #1b2b34;
+  --panel: #1b2b34;
+  --input: #343d46;
+  --hover: #4f5b66;
+  --list-hover: #343d46;
+  --border: #343d46;
+  --control-border: transparent;
+  --text: #d8dee9;
+  --muted: #a7adba;
+  --dim: #65737e;
+  --accent: #4f7ba8;
+  --accent-hover: #6699cc;
+  --focus: #6699cc;
+  --warn: #fac863;
+  --error: #ec5f67;
+  --env-key: #6699cc;
+  --shadow: rgba(0, 0, 0, 0.4);
+  --diff-del: rgba(236, 95, 103, 0.16);
+  --diff-del-strong: rgba(236, 95, 103, 0.42);
+  --diff-add: rgba(153, 199, 148, 0.14);
+  --diff-add-strong: rgba(153, 199, 148, 0.36);
+  --band: rgba(255, 255, 255, 0.05);
+  --syn-comment: #65737e;
+  --syn-keyword: #c594c5;
+  --syn-string: #99c794;
+  --syn-number: #f99157;
+  --syn-title: #6699cc;
+  --syn-type: #fac863;
+  --syn-variable: #ec5f67;
 }
 
 * { box-sizing: border-box; }
@@ -95,7 +188,7 @@ html, body {
 
 body {
   display: grid;
-  grid-template-rows: var(--titlebar-height) 1fr;
+  grid-template-rows: var(--titlebar-height) minmax(0, 1fr) 24px;
 }
 
 /* --- Title bar ----------------------------------------------------------------------- */
@@ -249,6 +342,7 @@ body {
 #terminal-tabs .tab.exited .label { color: var(--dim); font-style: italic; }
 #terminal-tabs .tab-close {
   flex: none;
+  border-radius: 4px;
   width: 18px;
   height: 18px;
   padding: 0;
@@ -326,6 +420,138 @@ body {
 #compare-rows mark { color: inherit; }
 #compare-rows .del mark { background: var(--diff-del-strong); }
 #compare-rows .add mark { background: var(--diff-add-strong); }
+
+/* --- Status bar ----------------------------------------------------------------------------- */
+
+#statusbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  padding: 0 10px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  user-select: none;
+}
+#statusbar .spacer { flex: 1; }
+#statusbar span:not(.spacer):empty { display: none; }
+#status-message { flex-shrink: 0; max-width: 70%; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 600; }
+#status-cwd { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* --- Right pane: Claude and the Runsheet ------------------------------------------------------ */
+
+#right { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
+#right-tabs { background: var(--panel); }
+#right-tabs .tab { flex: none; padding: 0 16px; }
+#right-body { position: relative; min-height: 0; }
+#chat { height: 100%; }
+
+#runsheet { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+#runsheet[hidden], #runsheet-files[hidden], #runsheet-page[hidden], #runsheet-view[hidden], #runsheet-band[hidden], #runsheet-copy[hidden] { display: none; }
+#runsheet-name { margin-left: 6px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#runsheet .pad-bar { user-select: none; }
+#runsheet-lang { flex: none; color: var(--muted); font-size: 11px; }
+#runsheet-bar[hidden], #runsheet-bar [hidden] { display: none; }
+
+/* Web tab. The page itself is a native view laid over #web-slot. */
+#web { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+#web[hidden] { display: none; }
+#web-bar .nav { flex: none; width: 28px; padding: 0; }
+#web-bar button:disabled { opacity: 0.45; cursor: default; }
+#web-bar button:disabled:hover { background: var(--input); }
+#web-form { flex: 1; min-width: 80px; }
+#web-address { width: 100%; }
+#web-auto-run { flex: none; }
+#web-auto-run.on { background: var(--accent); color: var(--on-accent); }
+#web-slot { position: relative; flex: 1; min-height: 0; }
+#web-empty { max-width: 480px; margin: 0; padding: 24px; color: var(--muted); line-height: 1.5; }
+#setting-web-sites { margin: 0 0 6px; padding: 0; list-style: none; }
+#setting-web-sites li { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+#setting-web-sites .none { color: var(--muted); }
+
+/* The file list fills the pane until a file opens, then collapses into the bar above. */
+#runsheet-files { display: flex; flex: 1; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border); }
+#runsheet.has-file #runsheet-files { flex: none; max-height: 45%; }
+#runsheet-filter { width: 160px; min-width: 60px; }
+#runsheet-folder-path { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font: 12px "Cascadia Mono", Menlo, Consolas, monospace; }
+#runsheet-list { flex: 1; min-height: 0; margin: 0; padding: 4px 0; overflow-y: auto; list-style: none; }
+#runsheet-list button {
+  display: block;
+  width: 100%;
+  height: 26px;
+  padding: 0 12px;
+  overflow: hidden;
+  background: none;
+  border: none;
+  border-radius: 0;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+#runsheet-list button:hover { background: var(--list-hover); }
+#runsheet-list button.current { color: var(--focus); font-weight: 600; }
+#runsheet-list .folder { color: var(--muted); }
+#runsheet-list .message { padding: 12px; color: var(--muted); line-height: 1.5; }
+
+/* Markdown runsheets, shown as a formatted page. */
+#runsheet-page { flex: 1; min-height: 0; overflow: auto; padding: 16px 24px 32px; line-height: 1.55; font-size: 14px; }
+#runsheet-page > * { max-width: 820px; }
+#runsheet-page h1, #runsheet-page h2, #runsheet-page h3, #runsheet-page h4 { margin: 1.4em 0 0.5em; line-height: 1.25; }
+#runsheet-page > :first-child { margin-top: 0; }
+#runsheet-page h1 { font-size: 24px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+#runsheet-page h2 { font-size: 19px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+#runsheet-page h3 { font-size: 16px; }
+#runsheet-page a { color: var(--focus); }
+#runsheet-page code { padding: 1px 4px; background: var(--input); border-radius: 4px; font: 12.5px "Cascadia Mono", Menlo, Consolas, monospace; }
+#runsheet-page pre { position: relative; padding: 10px 12px; overflow-x: auto; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
+#runsheet-page pre code { padding: 0; background: none; font-size: 13px; line-height: 20px; }
+#runsheet-page .block-copy { position: absolute; top: 6px; right: 6px; visibility: hidden; user-select: none; }
+#runsheet-page pre:hover .block-copy { visibility: visible; }
+#runsheet-page blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid var(--border); color: var(--muted); }
+#runsheet-page table { border-collapse: collapse; }
+#runsheet-page th, #runsheet-page td { padding: 4px 10px; border: 1px solid var(--border); text-align: left; }
+#runsheet-page hr { border: none; border-top: 1px solid var(--border); }
+#runsheet-page img { max-width: 100%; }
+#runsheet-view { position: relative; flex: 1; min-height: 0; }
+#runsheet-scroll { position: absolute; inset: 0; overflow: auto; }
+/* Fixed line height: hovering finds its line from the mouse position. Keep in sync with renderer.js. */
+#runsheet-content {
+  position: relative;
+  display: flex;
+  width: max-content;
+  min-width: 100%;
+  padding: 8px 0;
+  font: 13px/20px "Cascadia Mono", Menlo, Consolas, monospace;
+}
+#runsheet-content pre { margin: 0; font: inherit; }
+#runsheet-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  flex: none;
+  padding: 0 12px 0 8px;
+  background: var(--bg);
+  color: var(--dim);
+  text-align: right;
+  user-select: none;
+}
+#runsheet-code { position: relative; flex: 1; padding-right: 72px; }
+#runsheet-code code { font: inherit; }
+#runsheet-band { position: absolute; left: 0; right: 0; background: var(--band); pointer-events: none; }
+#runsheet-copy { position: absolute; right: 12px; z-index: 2; box-shadow: 0 1px 4px var(--shadow); }
+
+/* Syntax colours. Highlight.js marks up tokens; each theme supplies the colours. */
+#runsheet .hljs-comment, #runsheet .hljs-quote { color: var(--syn-comment); }
+#runsheet .hljs-keyword, #runsheet .hljs-selector-tag, #runsheet .hljs-meta { color: var(--syn-keyword); }
+#runsheet .hljs-string, #runsheet .hljs-regexp, #runsheet .hljs-addition { color: var(--syn-string); }
+#runsheet .hljs-number, #runsheet .hljs-literal, #runsheet .hljs-symbol { color: var(--syn-number); }
+#runsheet .hljs-title, #runsheet .hljs-section, #runsheet .hljs-name { color: var(--syn-title); }
+#runsheet .hljs-built_in, #runsheet .hljs-type, #runsheet .hljs-class { color: var(--syn-type); }
+#runsheet .hljs-variable, #runsheet .hljs-template-variable, #runsheet .hljs-attr,
+#runsheet .hljs-attribute, #runsheet .hljs-params, #runsheet .hljs-deletion { color: var(--syn-variable); }
+#runsheet .hljs-subst { color: inherit; }
 
 /* --- Settings ----------------------------------------------------------------------------- */
 
@@ -411,7 +637,7 @@ input {
   background: var(--input);
   color: var(--text);
   border: 1px solid var(--control-border);
-  border-radius: 2px;
+  border-radius: var(--radius);
   font: inherit;
   outline: none;
 }
@@ -449,7 +675,7 @@ button, select {
   background: var(--input);
   color: var(--text);
   border: 1px solid var(--control-border);
-  border-radius: 2px;
+  border-radius: var(--radius);
   font: inherit;
   cursor: pointer;
 }

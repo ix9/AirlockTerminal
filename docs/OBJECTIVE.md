@@ -21,8 +21,8 @@ the middle of the workflow without slowing it down.
 2. The left pane is a fully interactive shell, with colours, TUIs and Ctrl+C working, and the
    shell can be switched from the toolbar.
 3. Copying in the chat (the code-block copy button or Ctrl+C) fills the airlock.
-4. Ctrl+Enter in the airlock sends its text to the terminal. Nothing runs without that
-   explicit action.
+4. Ctrl+Enter in the airlock sends its text to the terminal. Nothing runs without an explicit
+   action: that, or a deliberate double-copy ([ADR 0005](adr/0005-double-copy.md)).
 5. Window size, divider positions and the last shell are remembered between sessions.
 6. Installers for Windows and macOS (Linux AppImage if feasible), published on GitHub
    Releases.
@@ -49,7 +49,17 @@ the middle of the workflow without slowing it down.
 - **Terminal tabs:** each tab has its own shell, working directory, env strip and AWS selection.
   The airlock and scratchpad are shared and act on the active terminal
   ([ADR 0004](adr/0004-tabs-and-saved-state.md)).
-- **Themes:** Dark Modern, Light Modern, high contrast, or following the system.
+- **Themes:** Dark Modern, Light Modern, high contrast, Monokai, Oceanic Next, or following the
+  system.
+- **Runsheet:** a tab beside Claude listing the files in a chosen folder. An opened file shows
+  read-only: scripts with syntax highlighting, Markdown as a formatted page. Copying from it fills
+  the airlock, as copying in the chat does.
+- **Web tab:** a small browser beside Claude, for pages such as Confluence. Copying from a page
+  fills the airlock.
+- **Double-copy:** copying the same text twice quickly, from the chat, a runsheet or a Web tab site
+  with Auto-run on, also runs it
+  ([ADR 0005](adr/0005-double-copy.md)).
+- **Status bar** across the bottom of the window.
 - **Settings** are remembered: window size, divider positions, font size, last shell and theme.
 - **Saved terminal output** (opt-in) restores tabs and their output after a restart.
 - **Snippets folder:** snippets can live in a git or synced folder.
@@ -57,7 +67,7 @@ the middle of the workflow without slowing it down.
 
 ## Out of scope (for now)
 - Using an existing browser profile.
-- Running commands automatically, or parsing chat content beyond copy events.
+- Running commands without a deliberate user action, or parsing chat content beyond copy events.
 - Plugins.
 - SSH from the shell picker. Running `ssh` by hand works, without cwd or env reporting.
 - File editing (Wave-style). Possible later, as its own ADR.
