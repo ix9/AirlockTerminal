@@ -1051,8 +1051,8 @@ renderWebSites(prefs.webAutoRunSites ?? []);
 showRightTab(rightTab);
 
 // --- Runsheet ------------------------------------------------------------------------------
-// A script shown read-only. Copying from it works like copying from the chat: the text goes to
-// the airlock and nothing runs until the user presses Run.
+// A script to read, with Edit for changing it. Copying from it works like copying from the chat:
+// the text goes to the airlock and nothing runs until the user presses Run.
 
 // Lines are a fixed height so the mouse position gives the line. It grows with the text size,
 // which sets --runsheet-line-height for style.css.
@@ -1083,6 +1083,11 @@ let runsheetBlocks = [];
 let runsheetFiles = [];
 let hoveredBlock = null;
 let filesOpen = false;
+let runsheetEditing = false;
+let scrollBeforeEdit = 0;
+
+const hasRunsheetEdits = () => runsheetEditing && $('runsheet-editor').value !== runsheetText;
+const runsheetScroller = () => ($('runsheet-page').hidden ? $('runsheet-scroll') : $('runsheet-page'));
 
 // The file list fills the pane until a file opens, then collapses into the bar above it.
 function syncRunsheetLayout() {
@@ -1091,6 +1096,12 @@ function syncRunsheetLayout() {
   $('runsheet-files').hidden = hasFile && !filesOpen;
   for (const id of ['runsheet-toggle', 'runsheet-reload', 'runsheet-airlock', 'runsheet-name', 'runsheet-lang']) $(id).hidden = !hasFile;
   $('runsheet-bar').hidden = !hasFile;
+  $('runsheet').classList.toggle('editing', runsheetEditing);
+  $('runsheet-edit').hidden = !hasFile || runsheetEditing;
+  $('runsheet-reload').hidden = !hasFile || runsheetEditing;
+  $('runsheet-save').hidden = !runsheetEditing;
+  $('runsheet-cancel').hidden = !runsheetEditing;
+  $('runsheet-name').textContent = `${runsheetRelative}${hasRunsheetEdits() ? ' •' : ''}`;
   $('runsheet-toggle').textContent = filesOpen ? 'Files ▴' : 'Files ▾';
   $('runsheet-toggle').setAttribute('aria-expanded', String(filesOpen));
 }
@@ -1100,6 +1111,7 @@ function closeRunsheet() {
   runsheetRelative = '';
   hoveredBlock = null;
   filesOpen = false;
+  runsheetEditing = false;
   $('runsheet-view').hidden = true;
   $('runsheet-page').hidden = true;
   syncRunsheetLayout();
@@ -1152,14 +1164,17 @@ async function loadRunsheetList() {
 }
 
 async function openRunsheetFile(relative) {
+  if (hasRunsheetEdits()) { toast('Save or cancel your changes first.', { error: true }); return; }
   const sheet = await window.airlock.openRunsheet(relative);
   if (!sheet) return;
   if (sheet.error) { toast(`Can't open ${sheet.name}: ${sheet.error}.`, { error: true }); return; }
   filesOpen = false;
+  runsheetEditing = false;
   renderRunsheet(sheet);
 }
 
 async function chooseRunsheetFolder() {
+  if (hasRunsheetEdits()) { toast('Save or cancel your changes first.', { error: true }); return; }
   const chosen = await window.airlock.chooseRunsheetFolder();
   if (!chosen) return;
   prefs.runsheetFolder = chosen.folder;
@@ -1251,7 +1266,6 @@ function renderRunsheet(sheet) {
   $('runsheet-page').hidden = !isPage;
   if (isPage) renderMarkdown(text, sheet.baseUrl);
   else renderScript(text, language);
-  $('runsheet-name').textContent = sheet.relative;
   $('runsheet-name').title = sheet.path;
   $('runsheet-lang').textContent = language === 'plaintext' ? 'Plain text' : hljs.getLanguage(language).name;
   syncRunsheetLayout();
@@ -1260,6 +1274,7 @@ function renderRunsheet(sheet) {
 }
 
 async function reloadRunsheet({ quiet = false } = {}) {
+  if (runsheetEditing) return; // saving checks whether the file changed underneath the edit
   const sheet = await window.airlock.readRunsheet();
   if (!sheet) return;
   if (!sheet.error) { renderRunsheet(sheet); return; }
@@ -1274,8 +1289,78 @@ window.addEventListener('focus', () => {
   loadRunsheetList();
 });
 
+// Editing shows the file's plain text, ready to change. Starts from what's on disk now.
+async function startEditingRunsheet() {
+  const sheet = await window.airlock.readRunsheet();
+  if (!sheet) return;
+  if (sheet.error) { toast(`Can't open ${sheet.name}: ${sheet.error}.`, { error: true }); return; }
+  renderRunsheet(sheet);
+  if (!sheet.editable) { toast(`Can't edit ${sheet.name}: it isn't valid UTF-8 or UTF-16, so saving could damage it.`, { error: true }); return; }
+  const editor = $('runsheet-editor');
+  const isPage = !$('runsheet-page').hidden;
+  scrollBeforeEdit = runsheetScroller().scrollTop;
+  editor.value = runsheetText;
+  runsheetEditing = true;
+  syncRunsheetLayout();
+  editor.scrollTop = isPage ? 0 : scrollBeforeEdit; // scripts have the same line height in both
+  editor.setSelectionRange(0, 0);
+  editor.focus({ preventScroll: true });
+}
+
+function stopEditingRunsheet() {
+  const isPage = !$('runsheet-page').hidden;
+  const scroll = isPage ? scrollBeforeEdit : $('runsheet-editor').scrollTop;
+  runsheetEditing = false;
+  syncRunsheetLayout();
+  runsheetScroller().scrollTop = scroll;
+}
+
+let savingRunsheet = false;
+async function saveRunsheet() {
+  if (savingRunsheet) return;
+  if (!hasRunsheetEdits()) { stopEditingRunsheet(); return; }
+  const editor = $('runsheet-editor');
+  savingRunsheet = true;
+  editor.readOnly = true; // what's saved has to be what's on screen
+  try {
+    const sheet = await window.airlock.saveRunsheet(runsheetRelative, editor.value, runsheetText);
+    if (!sheet) return;
+    if (sheet.error) { toast(`Can't save ${sheet.name}: ${sheet.error}.`, { error: true }); return; }
+    stopEditingRunsheet();
+    renderRunsheet(sheet);
+    setStatus(`Saved ${sheet.name}`, 3000);
+  } finally {
+    savingRunsheet = false;
+    editor.readOnly = false;
+  }
+}
+
+$('runsheet-edit').addEventListener('click', startEditingRunsheet);
+$('runsheet-save').addEventListener('click', saveRunsheet);
+$('runsheet-cancel').addEventListener('click', async () => {
+  if (!hasRunsheetEdits() || await window.airlock.confirmDiscardRunsheet()) stopEditingRunsheet();
+});
+$('runsheet-editor').addEventListener('input', syncRunsheetLayout);
+$('runsheet-editor').addEventListener('keydown', (e) => {
+  const mod = window.airlock.platform === 'darwin' ? e.metaKey : e.ctrlKey;
+  if (mod && !e.altKey && !e.shiftKey && e.code === 'KeyS') {
+    e.preventDefault();
+    e.stopPropagation();
+    saveRunsheet();
+  } else if (e.key === 'Tab' && !e.shiftKey && !mod && !e.ctrlKey && !e.altKey) {
+    e.preventDefault();
+    document.execCommand('insertText', false, '\t'); // unlike setting the value, this can be undone
+  }
+});
+// Main asks before the window closes with this held open (will-prevent-unload).
+window.addEventListener('beforeunload', (e) => { if (hasRunsheetEdits()) e.returnValue = false; });
+
 // The selected part of the script or page. A drag can run past it, and only the runsheet counts.
 function runsheetSelection() {
+  if (runsheetEditing) {
+    const editor = $('runsheet-editor');
+    return editor.value.slice(editor.selectionStart, editor.selectionEnd);
+  }
   const container = $('runsheet-page').hidden ? $('runsheet-code') : $('runsheet-page');
   const selection = window.getSelection();
   if (!selection.rangeCount) return '';

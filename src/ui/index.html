@@ -157,7 +157,7 @@
       <nav id="right-tabs" class="tabs">
         <button id="tab-claude" class="tab">Claude</button>
         <button id="tab-web" class="tab" title="Browse any site and copy commands from it">Web</button>
-        <button id="tab-runsheet" class="tab" title="A script to work through, read-only">Runsheet</button>
+        <button id="tab-runsheet" class="tab" title="A folder of scripts to work through and edit">Runsheet</button>
         <button id="tab-team" class="tab" title="Snippets shared with your team through git repos">Team Snippets</button>
         <button id="tab-personal" class="tab" title="Your own snippets, kept in git repos">Personal Snippets</button>
       </nav>
@@ -185,6 +185,9 @@
             <span id="runsheet-lang"></span>
             <span class="spacer"></span>
             <button id="runsheet-reload" title="Read the file again">Reload</button>
+            <button id="runsheet-edit" title="Edit this file">Edit</button>
+            <button id="runsheet-save" title="Save this file">Save</button>
+            <button id="runsheet-cancel" title="Stop editing without saving">Cancel</button>
             <button id="runsheet-run-selection" title="Run the highlighted text in the terminal">Run selection</button>
             <button id="runsheet-airlock" class="primary" title="Send the highlighted text to the airlock. Press twice quickly to run it.">To airlock</button>
           </header>
@@ -210,6 +213,7 @@
             </div>
           </div>
           <article id="runsheet-page" tabindex="-1" hidden></article>
+          <textarea id="runsheet-editor" wrap="off" spellcheck="false" aria-label="File contents"></textarea>
         </div>
         <div id="team" hidden>
           <header id="team-bar" class="pad-bar">

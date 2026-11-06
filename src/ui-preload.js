@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld('airlock', {
   listRunsheets: () => ipcRenderer.invoke('runsheet:list'),
   chooseRunsheetFolder: () => ipcRenderer.invoke('runsheet:choose-folder'),
   openRunsheet: (relative) => ipcRenderer.invoke('runsheet:open', relative),
+  saveRunsheet: (relative, text, expected) => ipcRenderer.invoke('runsheet:save', relative, text, expected),
+  confirmDiscardRunsheet: () => ipcRenderer.invoke('runsheet:confirm-discard'),
   setWebBounds: (rect) => ipcRenderer.send('web:bounds', rect),
   setWebVisible: (visible) => ipcRenderer.send('web:visible', visible),
   webGo: (input) => ipcRenderer.send('web:go', input),
