@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { execFileSync } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const { app, BrowserWindow, WebContentsView, Menu, dialog, ipcMain, nativeTheme, screen, session, shell } = require('electron');
 const pty = require('node-pty');
@@ -37,18 +37,34 @@ const THEMES = {
   oceanic: { background: '#1b2b34', symbols: '#d8dee9' },
 };
 
+// Snippet repos (ADR 0006). An address is any git address, but never one starting with '-', which git
+// would read as an option. The SSH key path goes through a shell, so it can't hold quotes or $.
+const validRepoId = (id) => typeof id === 'string' && /^[a-z0-9]{1,16}$/.test(id);
+const REPO_URL = /^(https:\/\/|ssh:\/\/|git@|file:\/\/)\S+$/;
+const optionalLine = (v, max, bad = /[\r\n]/) => v === undefined || v === '' || (typeof v === 'string' && v.length <= max && !bad.test(v));
+const validRepo = (r) => Boolean(r) && validRepoId(r.id)
+  && typeof r.label === 'string' && Boolean(r.label.trim()) && r.label.length <= 40 && !/[\r\n]/.test(r.label)
+  && typeof r.url === 'string' && r.url.length <= 500 && REPO_URL.test(r.url)
+  && (r.kind === 'team' || r.kind === 'personal')
+  && optionalLine(r.name, 100) && optionalLine(r.email, 200) && optionalLine(r.sshKey, 500, /[\r\n"$`]/);
+
 const isPercent = (v) => Number.isFinite(v) && v > 0 && v < 100;
 // What the UI may change. The window, folders, files and web settings are set only by this process.
 const SETTING_RULES = {
   theme: (v) => v === 'system' || Object.hasOwn(THEMES, v),
   fontSize: (v) => Number.isFinite(v) && v >= 8 && v <= 32,
+  airlockFontSize: (v) => Number.isFinite(v) && v >= 8 && v <= 32,
+  runsheetFontSize: (v) => Number.isFinite(v) && v >= 8 && v <= 32,
   lastShell: (v) => typeof v === 'string',
   leftWidth: isPercent,
   airlockHeight: isPercent,
   scratchLeft: isPercent,
   saveScrollback: (v) => typeof v === 'boolean',
-  rightTab: (v) => v === 'claude' || v === 'web' || v === 'runsheet',
+  rightTab: (v) => ['claude', 'web', 'runsheet', 'team', 'personal'].includes(v),
   doubleCopyRun: (v) => typeof v === 'boolean',
+  showOtherFolderSnippets: (v) => typeof v === 'boolean',
+  snippetRepos: (v) => Array.isArray(v) && v.length <= 10 && v.every(validRepo) && new Set(v.map((r) => r.id)).size === v.length,
+  lastSnippetRepo: (v) => validRepoId(v),
 };
 
 let settings = { theme: 'dark' };
@@ -57,7 +73,12 @@ let settingsTimer = null;
 function loadSettings() {
   try {
     const raw = JSON.parse(fs.readFileSync(dataFile('settings.json'), 'utf8'));
+    // Repos saved before there were Team and Personal tabs go in Team.
+    if (Array.isArray(raw.snippetRepos)) raw.snippetRepos = raw.snippetRepos.map((r) => (r && !r.kind ? { ...r, kind: 'team' } : r));
     for (const [key, valid] of Object.entries(SETTING_RULES)) if (valid(raw[key])) settings[key] = raw[key];
+    if (!settings.snippetRepos && typeof raw.teamRepoUrl === 'string' && REPO_URL.test(raw.teamRepoUrl)) {
+      settings.snippetRepos = [{ id: 'team', label: 'Team', url: raw.teamRepoUrl, kind: 'team' }];
+    }
     if (typeof raw.snippetsDir === 'string') settings.snippetsDir = raw.snippetsDir;
     if (typeof raw.runsheetPath === 'string') settings.runsheetPath = raw.runsheetPath;
     if (typeof raw.runsheetFolder === 'string') settings.runsheetFolder = raw.runsheetFolder;
@@ -384,6 +405,27 @@ ipcMain.on('pty:cwd', (e, id, cwd) => {
   if (fromUi(e) && t && typeof cwd === 'string') t.cwd = cwd;
 });
 
+// The README of the git repository a terminal is in. Its code blocks are offered as snippets;
+// the UI only ever loads them into the airlock.
+const README_MAX_BYTES = 512 * 1024;
+async function repoReadme(dir) {
+  for (let d = dir; ; d = path.dirname(d)) {
+    if (fs.existsSync(path.join(d, '.git'))) {
+      const name = (await fs.promises.readdir(d)).find((f) => /^readme\.md$/i.test(f));
+      if (!name) return null;
+      const file = path.join(d, name);
+      if ((await fs.promises.stat(file)).size > README_MAX_BYTES) return null;
+      return { repo: path.basename(d), text: await fs.promises.readFile(file, 'utf8') };
+    }
+    if (path.dirname(d) === d) return null;
+  }
+}
+ipcMain.handle('readme:snippets', async (e, id) => {
+  const t = terminals.get(id);
+  if (!fromUi(e) || !t?.cwd) return null;
+  try { return await repoReadme(hostCwd(t)); } catch { return null; }
+});
+
 // --- Claude usage (unofficial: the endpoint claude.ai's Usage page uses, ADR 0003) --------
 
 const USAGE_POLL_MS = 5 * 60 * 1000;
@@ -429,6 +471,7 @@ ipcMain.on('settings:set', (e, patch) => {
     if (Object.hasOwn(patch, key) && valid(patch[key])) settings[key] = patch[key];
   }
   if (patch.theme) { applyThemeSource(); pushTheme(); }
+  if (Object.hasOwn(patch, 'snippetRepos')) removeStaleClones();
   if (patch.saveScrollback === false) fs.rm(dataFile('scrollback.json'), { force: true }, () => {});
   saveSettings();
 });
@@ -469,7 +512,8 @@ ipcMain.handle('snippets:save', (e, list) => {
   if (!fromUi(e) || !Array.isArray(list)) return { error: 'bad request' };
   const clean = list
     .filter((s) => typeof s?.name === 'string' && typeof s?.command === 'string')
-    .map(({ name, command }) => ({ name, command }));
+    // `cwd`: the folder the snippet belongs to, as the shell reported it. Absent for regular snippets.
+    .map(({ name, command, cwd }) => (typeof cwd === 'string' && cwd ? { name, command, cwd } : { name, command }));
   try {
     readSnippets();
     writeSnippets(clean);
@@ -498,6 +542,254 @@ ipcMain.handle('snippets:choose-folder', async (e) => {
 });
 ipcMain.handle('snippets:reset-folder', (e) => {
   if (fromUi(e)) { delete settings.snippetsDir; saveSettings(); }
+});
+
+// --- Snippet repos: shared git repos, one Markdown file per snippet (ADR 0006) --------------
+// Each repo in Settings has its own clone, its own commit name and email, and optionally its own
+// SSH key, so a work and a personal account can sit side by side.
+
+const reposDir = () => dataFile('team-snippets');
+const repoDir = (repo) => path.join(reposDir(), repo.id);
+const TEAM_FILE = /^[a-z0-9][a-z0-9-]{0,79}\.md$/;
+const TEAM_NAME_MAX = 200;
+const TEAM_COMMAND_MAX = 64 * 1024;
+const findRepo = (id) => settings.snippetRepos?.find((r) => r.id === id);
+
+function git(args, cwd) {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, {
+      cwd, timeout: 120000, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
+      // Fail instead of waiting for a password nobody can type. Credential Manager and SSH still work.
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    }, (err, stdout, stderr) => {
+      if (!err) return resolve(stdout);
+      const message = (stderr || err.message).trim();
+      if (err.code === 'ENOENT') reject(new Error('Git isn\'t installed, or isn\'t on the PATH.'));
+      else if (/tell me who you are|author identity unknown/i.test(message)) {
+        reject(new Error('Git needs a name: set a commit name and email for this repo in Settings.'));
+      } else reject(Object.assign(new Error(message.split('\n').filter((l) => !l.startsWith('hint:')).join('\n')), { code: err.code }));
+    });
+  });
+}
+
+// Sets a value in this clone's own git config, or removes it so the global one applies.
+async function setLocalConfig(dir, key, value) {
+  if (value) return git(['config', '--local', key, value], dir);
+  try { await git(['config', '--local', '--unset', key], dir); } catch {} // wasn't set
+}
+
+// The repo's identity, kept in its clone only. The global git config is never touched.
+async function applyIdentity(repo) {
+  const dir = repoDir(repo);
+  await setLocalConfig(dir, 'user.name', repo.name);
+  await setLocalConfig(dir, 'user.email', repo.email);
+  // Forward slashes and quotes, because git runs this through a shell.
+  const key = repo.sshKey?.replace(/\\/g, '/');
+  await setLocalConfig(dir, 'core.sshCommand', key ? `ssh -i "${key}" -o IdentitiesOnly=yes` : '');
+}
+
+// Git makes its object files read-only, and on Windows that stops them being deleted.
+async function removeTree(dir) {
+  const writable = async (p) => {
+    let entries;
+    try { entries = await fs.promises.readdir(p, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const f = path.join(p, e.name);
+      if (e.isDirectory()) await writable(f);
+      else await fs.promises.chmod(f, 0o666).catch(() => {});
+    }
+  };
+  await writable(dir);
+  await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 3 });
+}
+
+// The clone, made again if the repo's address changed.
+async function repoClone(repo) {
+  const dir = repoDir(repo);
+  if (fs.existsSync(path.join(dir, '.git'))) {
+    try {
+      if ((await git(['remote', 'get-url', 'origin'], dir)).trim() === repo.url) return;
+    } catch {} // a broken clone: start again
+  }
+  await removeTree(dir);
+  await fs.promises.mkdir(reposDir(), { recursive: true });
+  // The SSH key has to apply to the clone itself, before the clone's own config exists.
+  const key = repo.sshKey?.replace(/\\/g, '/');
+  const sshArgs = key ? ['-c', `core.sshCommand=ssh -i "${key}" -o IdentitiesOnly=yes`] : [];
+  await git([...sshArgs, 'clone', '--quiet', '--', repo.url, dir], reposDir());
+}
+
+// Brings the clone to exactly what the server has, and returns the branch. Safe because the clone
+// only ever holds commits that were pushed straight away.
+async function repoSync(repo, fresh = false) {
+  const dir = repoDir(repo);
+  await repoClone(repo);
+  await applyIdentity(repo);
+  await git(['fetch', '--quiet', '--prune', 'origin'], dir);
+  let branch = (await git(['symbolic-ref', '--short', 'HEAD'], dir)).trim();
+  let onServer = true;
+  try { await git(['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`], dir); } catch { onServer = false; }
+  if (onServer) {
+    await git(['reset', '--quiet', '--hard', `origin/${branch}`], dir);
+  } else if (!(await git(['branch', '--remotes'], dir)).trim()) {
+    // A new, empty repo: start it on main, whatever this machine's git defaults to.
+    branch = 'main';
+    await git(['symbolic-ref', 'HEAD', 'refs/heads/main'], dir);
+    await git(['rm', '-r', '--cached', '--quiet', '--ignore-unmatch', '.'], dir);
+  } else if (!fresh) {
+    // Cloned while the repo was empty, and someone else has pushed first since: clone again.
+    await removeTree(dir);
+    return repoSync(repo, true);
+  }
+  await git(['clean', '-fdq'], dir);
+  return branch;
+}
+
+// Who last changed each file, and when, from one `git log`.
+async function repoEdits(repo) {
+  const edits = new Map();
+  let log = '';
+  try {
+    log = await git(['log', '--format=%x1e%an%x1f%aI', '--name-only', '--', 'snippets'], repoDir(repo));
+  } catch { return edits; } // no commits yet
+  for (const entry of log.split('\x1e').slice(1)) {
+    const [head, ...files] = entry.split('\n');
+    const [by, at] = head.split('\x1f');
+    for (const f of files) {
+      const file = path.posix.basename(f.trim());
+      if (file && !edits.has(file)) edits.set(file, { by, at: at?.trim() });
+    }
+  }
+  return edits;
+}
+
+const snippetPath = (repo, file) => path.join(repoDir(repo), 'snippets', file);
+// Line endings depend on git's settings, so they never count as a change.
+async function readSnippetFile(repo, file) {
+  try {
+    return (await fs.promises.readFile(snippetPath(repo, file), 'utf8')).replace(/\r\n/g, '\n');
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+async function repoList(repo) {
+  await repoSync(repo);
+  let files = [];
+  try { files = (await fs.promises.readdir(path.join(repoDir(repo), 'snippets'))).filter((f) => TEAM_FILE.test(f)); } catch {}
+  const edits = await repoEdits(repo);
+  const list = await Promise.all(files.map(async (file) => ({ file, text: await readSnippetFile(repo, file), ...edits.get(file) })));
+  return list.filter((s) => s.text !== null);
+}
+
+// The first heading is the name and the first code block is the command. The fence is longer
+// than any run of backticks in the command, so the command can't end it early.
+function snippetMarkdown(name, command) {
+  const longest = Math.max(2, ...(command.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longest + 1);
+  return `# ${name}\n\n${fence}\n${command}\n${fence}\n`;
+}
+
+function newSnippetFile(repo, name) {
+  const slug = name.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'snippet';
+  for (let n = 1; ; n++) {
+    const file = n === 1 ? `${slug}.md` : `${slug}-${n}.md`;
+    if (!fs.existsSync(snippetPath(repo, file))) return file;
+  }
+}
+
+// Sync, check the file is still what the user opened, change it, commit and push. A push that
+// loses a race starts again from the server's version.
+async function repoChange(repo, { file, base, label, apply }) {
+  const dir = repoDir(repo);
+  for (let attempt = 1; ; attempt++) {
+    const branch = await repoSync(repo);
+    if (file) {
+      const current = await readSnippetFile(repo, file);
+      if (current !== base) return { conflict: true, text: current };
+    }
+    const changed = await apply();
+    try {
+      await git(['diff', '--cached', '--quiet'], dir);
+      return { file: changed }; // nothing to commit
+    } catch {}
+    await git(['commit', '--quiet', '-m', label], dir);
+    try {
+      await git(['push', '--quiet', 'origin', `HEAD:refs/heads/${branch}`], dir);
+      return { file: changed };
+    } catch (err) {
+      if (attempt >= 3 || !/rejected|fetch first|non-fast-forward/i.test(err.message)) throw err;
+    }
+  }
+}
+
+function repoSave(repo, { file, base, name, command }) {
+  return repoChange(repo, {
+    file, base, label: `${file ? 'Update' : 'Add'} snippet: ${name}`,
+    apply: async () => {
+      const target = file ?? newSnippetFile(repo, name);
+      await fs.promises.mkdir(path.join(repoDir(repo), 'snippets'), { recursive: true });
+      await fs.promises.writeFile(snippetPath(repo, target), snippetMarkdown(name, command));
+      await git(['add', '--', `snippets/${target}`], repoDir(repo));
+      return target;
+    },
+  });
+}
+
+function repoDelete(repo, { file, base, name }) {
+  return repoChange(repo, {
+    file, base, label: `Delete snippet: ${name}`,
+    apply: async () => {
+      await git(['rm', '--quiet', '--', `snippets/${file}`], repoDir(repo));
+      return file;
+    },
+  });
+}
+
+// One git operation at a time in each repo, so a sync never runs in the middle of a save. Repos
+// don't wait for each other.
+const repoQueues = new Map();
+function repoQueued(id, fn) {
+  const repo = findRepo(id);
+  if (!repo) return Promise.resolve({ error: 'That repo isn\'t in Settings any more.' });
+  const run = (repoQueues.get(id) ?? Promise.resolve()).then(() => fn(repo));
+  repoQueues.set(id, run.catch(() => {}));
+  return run.catch((err) => ({ error: err.message }));
+}
+
+// Removes clones of repos that are no longer in Settings. The single clone from before there could
+// be several sat directly in the folder, so that goes too.
+async function removeStaleClones() {
+  const keep = new Set((settings.snippetRepos ?? []).map((r) => r.id));
+  let entries = [];
+  try { entries = await fs.promises.readdir(reposDir()); } catch { return; }
+  const old = entries.includes('.git');
+  for (const name of entries) {
+    if (old || !keep.has(name)) {
+      try { await removeTree(path.join(reposDir(), name)); } catch {} // in use: next time
+    }
+  }
+}
+
+const validTeamFile = (f) => typeof f === 'string' && TEAM_FILE.test(f);
+const validTeamName = (n) => typeof n === 'string' && Boolean(n.trim()) && n.length <= TEAM_NAME_MAX && !/[\r\n]/.test(n);
+const validTeamCommand = (c) => typeof c === 'string' && Boolean(c.trim()) && c.length <= TEAM_COMMAND_MAX;
+
+ipcMain.handle('team:list', (e, id) => {
+  if (!fromUi(e) || !validRepoId(id)) return { error: 'bad request' };
+  return repoQueued(id, async (repo) => ({ list: await repoList(repo) }));
+});
+ipcMain.handle('team:save', (e, s) => {
+  if (!fromUi(e) || !validRepoId(s?.repo)) return { error: 'bad request' };
+  if (!validTeamName(s.name) || !validTeamCommand(s.command)) return { error: 'A snippet needs a one-line name and a command.' };
+  if (s.file != null && (!validTeamFile(s.file) || typeof s.base !== 'string')) return { error: 'bad request' };
+  const command = s.command.replace(/\r\n/g, '\n').replace(/\s+$/, '');
+  return repoQueued(s.repo, (repo) => repoSave(repo, { file: s.file ?? null, base: s.base, name: s.name.trim(), command }));
+});
+ipcMain.handle('team:delete', (e, s) => {
+  if (!fromUi(e) || !validRepoId(s?.repo) || !validTeamFile(s.file) || typeof s.base !== 'string' || typeof s.name !== 'string') return { error: 'bad request' };
+  return repoQueued(s.repo, (repo) => repoDelete(repo, { file: s.file, base: s.base, name: s.name.slice(0, TEAM_NAME_MAX) }));
 });
 
 // --- Airlock history: local only, private, and trimmed each time the app starts --------------
@@ -877,10 +1169,21 @@ Menu.setApplicationMenu(process.platform === 'darwin'
   }])
   : null);
 
+// One copy at a time: a second copy can't use the chat profile the first one has locked, so the
+// chat breaks. Launching again brings the open window forward instead.
+if (!app.requestSingleInstanceLock()) app.exit(0);
+app.on('second-instance', () => {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
+
 app.whenReady().then(() => {
   // Packaged builds get their icon from the app bundle.
   if (process.platform === 'darwin' && !app.isPackaged) app.dock.setIcon(APP_ICON);
   loadSettings();
+  removeStaleClones();
   applyThemeSource();
   maintainHistory();
   handleDownloads();

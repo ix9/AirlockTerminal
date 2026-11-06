@@ -64,6 +64,31 @@ $('terminal').addEventListener('wheel', (e) => {
 }, { passive: false, capture: true });
 new ResizeObserver(() => { for (const tab of tabs) tab.fit.fit(); }).observe($('terminal'));
 
+// The airlock and the runsheet zoom the same way as the terminal, each keeping its own size.
+function paneZoom(el, key, apply) {
+  let size = prefs[key] ?? DEFAULT_FONT_SIZE;
+  const set = (next) => {
+    size = Math.min(Math.max(next, 8), 32);
+    apply(size);
+    saveSetting(key, size);
+  };
+  apply(size);
+  el.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    set(size + (e.deltaY < 0 ? 1 : -1));
+  }, { passive: false });
+  el.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const next = e.key === '=' || e.key === '+' ? size + 1
+      : e.key === '-' || e.key === '_' ? size - 1
+        : e.key === '0' ? DEFAULT_FONT_SIZE : null;
+    if (next === null) return;
+    e.preventDefault();
+    set(next);
+  });
+}
+
 function tabLabel(tab) {
   const shellName = (shellLabels.get(tab.shellId) ?? 'Terminal').split(/[\\/]/).pop();
   return tab.cwd.split(/[\\/]/).filter(Boolean).pop() || tab.cwd || shellName;
@@ -96,12 +121,18 @@ function createTab(shellId) {
     fontSize,
     scrollback: SCROLLBACK_LINES,
     cursorBlink: true,
+    // Needed by the Unicode addon below.
+    allowProposedApi: true,
     ...terminalAppearance(),
     // OSC 8 hyperlinks printed by programs (ls --hyperlink, gh, etc.).
     linkHandler: { activate: (_e, uri) => window.airlock.openExternal(uri) },
   });
   const fit = new FitAddon.FitAddon();
   const serializer = new SerializeAddon.SerializeAddon();
+  // Character widths as the shells count them (Unicode 15). The default, Unicode 6, makes emoji
+  // one column wide where shells use two, so a prompt with emoji in it (oh-my-posh and the like)
+  // put every redraw of the line one column out, leaving ghost characters Backspace can't reach.
+  term.loadAddon(new UnicodeGraphemesAddon.UnicodeGraphemesAddon());
   term.loadAddon(fit);
   term.loadAddon(serializer);
   // Plain-text URLs.
@@ -180,6 +211,7 @@ function showTabState() {
   shellPicker.value = activeTab.shellId;
   renderEnv(activeTab);
   renderAwsPicker();
+  libraryFollowsTerminal();
 }
 
 function newTab() {
@@ -383,6 +415,7 @@ function handleShellReport(tab, data) {
   const [tag, cwdB64, envB64] = data.split(';');
   if (tag !== 'airlock') return false;
   try {
+    const previousCwd = tab.cwd;
     tab.cwd = b64(cwdB64 || '');
     tab.env = parseEnv(b64(envB64 || ''));
     tab.envBaseline ??= tab.env;
@@ -391,6 +424,7 @@ function handleShellReport(tab, data) {
     if (tab === activeTab) {
       renderEnv(tab);
       showAwsProfile(tab);
+      if (tab.cwd !== previousCwd) libraryFollowsTerminal();
     }
   } catch {}
   return true; // consumed: never shown in the terminal
@@ -448,6 +482,7 @@ $('restart').addEventListener('click', () => {
 // --- Airlock ----------------------------------------------------------------------------
 
 const airlockText = $('airlock-text');
+paneZoom(airlockText, 'airlockFontSize', (size) => root.setProperty('--airlock-font-size', `${size}px`));
 function fillAirlock(text) {
   airlockText.value = text;
   // Brief accent flash so the user notices the new content.
@@ -465,7 +500,7 @@ const DOUBLE_COPY_MS = 1500;
 const STATUS_RAN_MS = 4000;
 let lastCopy = null;
 
-function receiveCopy(text, gesture, { autoRunOff = false } = {}) {
+function receiveCopy(text, gesture, { autoRunOff = false, again = 'copy again quickly to auto-run' } = {}) {
   fillAirlock(text);
   const enabled = prefs.doubleCopyRun !== false;
   const now = Date.now();
@@ -473,7 +508,7 @@ function receiveCopy(text, gesture, { autoRunOff = false } = {}) {
     && lastCopy.text === text && now - lastCopy.at <= DOUBLE_COPY_MS;
   if (!isDouble) {
     lastCopy = { text, gesture, at: now };
-    const message = enabled && gesture ? 'Sent to Airlock, copy again quickly to auto-run'
+    const message = enabled && gesture ? `Sent to Airlock, ${again}`
       : autoRunOff ? 'Sent to Airlock. Auto-run is off for this site.' : 'Sent to Airlock';
     setStatus(message, DOUBLE_COPY_MS);
     return;
@@ -500,9 +535,19 @@ function runText(raw, { focus = true } = {}) {
   if (focus) activeTab.term.focus();
 }
 const runAirlock = () => runText(airlockText.value);
+// Only the highlighted part of the airlock text, for running one line of a longer block.
+function runAirlockSelection() {
+  const selected = airlockText.value.slice(airlockText.selectionStart, airlockText.selectionEnd);
+  if (selected.trim()) runText(selected);
+  else toast('Highlight the text to run first.', { error: true });
+}
 $('run').addEventListener('click', runAirlock);
+$('run-selection').addEventListener('click', runAirlockSelection);
 airlockText.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); runAirlock(); }
+  if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
+  e.preventDefault();
+  if (e.shiftKey) runAirlockSelection();
+  else runAirlock();
 });
 
 // --- Snippets / History sidebar ----------------------------------------------------------
@@ -521,9 +566,10 @@ function ago(iso) {
   return `${Math.floor(s / 86400)}d`;
 }
 
-function item({ label, mono, meta, title, onPick, onDelete }) {
+function item({ label, mono, meta, title, className, onPick, onDelete }) {
   const li = document.createElement('li');
   li.title = title;
+  if (className) li.className = className;
   const name = document.createElement('span');
   name.className = mono ? 'name cmd' : 'name';
   name.textContent = label;
@@ -572,12 +618,32 @@ function renderLibrary() {
   const matches = (...fields) => !q || fields.some((f) => f.toLowerCase().includes(q));
   let items;
   if (libraryTab === 'snippets') {
-    items = snippets.filter((s) => matches(s.name, s.command)).map((s) => item({
+    // Order: snippets for the terminal's folder or a folder it's inside (highlighted), the repo
+    // README's code blocks, regular snippets, then other folders' snippets if the box is ticked.
+    const here = withinPath(activeTab?.cwd ?? '');
+    const local = snippets.filter((s) => s.cwd && here(s.cwd));
+    const regular = snippets.filter((s) => !s.cwd);
+    const others = prefs.showOtherFolderSnippets ? snippets.filter((s) => s.cwd && !here(s.cwd)) : [];
+    const snippetItem = (s) => item({
       label: s.name,
-      title: s.command,
+      meta: s.cwd && !here(s.cwd) ? folderName(s.cwd) : '',
+      title: s.cwd ? `${s.command}\n\nFor ${s.cwd} and its subfolders` : s.command,
+      className: !s.cwd ? '' : here(s.cwd) ? 'local' : 'other',
       onPick: () => fillAirlock(s.command),
       onDelete: () => storeSnippets(snippets.filter((x) => x !== s)),
-    }));
+    });
+    items = [
+      ...local.filter((s) => matches(s.name, s.command)).map(snippetItem),
+      ...readme.blocks.filter((b) => matches(b.name, b.command)).map((b) => item({
+        label: b.name,
+        meta: 'README',
+        title: `${b.command}\n\nFrom the README in ${readme.repo}`,
+        className: 'readme',
+        onPick: () => fillAirlock(b.command),
+      })),
+      ...regular.filter((s) => matches(s.name, s.command)).map(snippetItem),
+      ...others.filter((s) => matches(s.name, s.command, s.cwd)).map(snippetItem),
+    ];
   } else {
     // Newest first, each command once (its latest run).
     const seen = new Set();
@@ -609,18 +675,92 @@ function showTab(tab) {
   libraryTab = tab;
   $('tab-snippets').classList.toggle('active', tab === 'snippets');
   $('tab-history').classList.toggle('active', tab === 'history');
+  $('other-folders-row').hidden = tab !== 'snippets';
   renderLibrary();
 }
 $('tab-snippets').addEventListener('click', () => showTab('snippets'));
 $('tab-history').addEventListener('click', () => showTab('history'));
 $('filter').addEventListener('input', renderLibrary);
 
+// Folders as the shell reports them. Windows paths ignore case and both slashes.
+function normalisePath(p) {
+  const windows = /^([a-z]:|\\\\)/i.test(p);
+  const trimmed = p.length > 1 ? p.replace(/[\\/]+$/, '') : p;
+  return windows ? trimmed.replace(/\//g, '\\').toLowerCase() : trimmed;
+}
+const samePath = (cwd) => {
+  const a = normalisePath(cwd);
+  return (other) => Boolean(a) && normalisePath(other) === a;
+};
+// True for a snippet folder that is the terminal's folder or contains it.
+const withinPath = (cwd) => {
+  const here = normalisePath(cwd);
+  return (folder) => {
+    const base = normalisePath(folder);
+    if (!here || !base) return false;
+    const sep = base.includes('\\') ? '\\' : '/';
+    return here === base || here.startsWith(base.endsWith(sep) ? base : base + sep);
+  };
+};
+const folderName = (p) => p.split(/[\\/]/).filter(Boolean).pop() || p;
+
+$('other-folders').checked = prefs.showOtherFolderSnippets === true;
+$('other-folders').addEventListener('change', (e) => {
+  saveSetting('showOtherFolderSnippets', e.target.checked);
+  renderLibrary();
+});
+
+// Code blocks from the README of the repository the active terminal is in, offered as snippets.
+let readme = { key: '', repo: '', blocks: [] };
+function readmeBlocks(text) {
+  const blocks = [];
+  const seen = new Map();
+  let heading = '';
+  const walk = (tokens) => {
+    for (const t of tokens ?? []) {
+      if (t.type === 'heading') heading = t.text.replace(/[`*_]/g, '');
+      if (t.type === 'code' && t.text.trim()) {
+        const base = heading || 'README';
+        const n = (seen.get(base) ?? 0) + 1;
+        seen.set(base, n);
+        blocks.push({ name: n > 1 ? `${base} (${n})` : base, command: t.text });
+      }
+      walk(t.tokens);
+      for (const listItem of t.items ?? []) walk(listItem.tokens);
+    }
+  };
+  walk(marked.lexer(text));
+  return blocks;
+}
+async function loadReadmeSnippets() {
+  const tab = activeTab;
+  const key = tab ? `${tab.id}\0${tab.cwd}` : '';
+  if (key === readme.key) return;
+  readme = { key, repo: '', blocks: [] };
+  const found = tab?.cwd ? await window.airlock.readmeSnippets(tab.id) : null;
+  if (readme.key !== key) return; // the folder or tab changed while reading
+  if (found) readme = { key, repo: found.repo, blocks: readmeBlocks(found.text) };
+  renderLibrary();
+}
+// Called whenever the active terminal or its folder changes.
+function libraryFollowsTerminal() {
+  renderLibrary();
+  loadReadmeSnippets();
+}
+
 // Save the airlock text as a snippet (inline name field; Electron has no prompt()).
 const snippetForm = $('snippet-form');
 function toggleSnippetForm(show) {
   snippetForm.hidden = !show;
   $('save-snippet').hidden = show;
-  if (show) $('snippet-name').focus();
+  if (!show) return;
+  const cwd = activeTab?.cwd ?? '';
+  const scope = $('snippet-scope');
+  scope.options[1].textContent = cwd ? `Only in ${folderName(cwd)}` : 'Only in this folder';
+  scope.options[1].disabled = !cwd;
+  scope.title = cwd ? `"Only in" shows the snippet at the top of the list when the terminal is in ${cwd} or a folder inside it` : '';
+  scope.value = 'all';
+  $('snippet-name').focus();
 }
 $('save-snippet').addEventListener('click', () => {
   if (airlockText.value.trim()) toggleSnippetForm(true);
@@ -631,7 +771,10 @@ snippetForm.addEventListener('submit', async (e) => {
   const name = $('snippet-name').value.trim();
   const command = airlockText.value.replace(/\s+$/, '');
   if (!name || !command) return;
-  const next = [...snippets.filter((s) => s.name !== name), { name, command }]
+  const cwd = $('snippet-scope').value === 'cwd' ? activeTab?.cwd ?? '' : '';
+  // Saving under an existing name replaces it, within the same folder (or among regular snippets).
+  const same = (s) => s.name === name && (cwd ? Boolean(s.cwd) && samePath(cwd)(s.cwd) : !s.cwd);
+  const next = [...snippets.filter((s) => !same(s)), cwd ? { name, command, cwd } : { name, command }]
     .sort((a, b) => a.name.localeCompare(b.name));
   if (!(await storeSnippets(next))) return;
   $('snippet-name').value = '';
@@ -799,14 +942,21 @@ function syncNativeViews() {
   window.airlock.setChatVisible(rightTab === 'claude');
   window.airlock.setWebVisible(rightTab === 'web');
 }
+// Team Snippets and Personal Snippets share one pane, each showing its own repos.
+const isSnippetTab = (tab) => tab === 'team' || tab === 'personal';
 function showRightTab(tab) {
   rightTab = tab;
   $('web').hidden = tab !== 'web';
   $('runsheet').hidden = tab !== 'runsheet';
+  $('team').hidden = !isSnippetTab(tab);
   $('tab-claude').classList.toggle('active', tab === 'claude');
   $('tab-web').classList.toggle('active', tab === 'web');
   $('tab-runsheet').classList.toggle('active', tab === 'runsheet');
+  $('tab-team').classList.toggle('active', tab === 'team');
+  $('tab-personal').classList.toggle('active', tab === 'personal');
   syncNativeViews();
+  // After this script has run, as the snippets section is defined further down.
+  if (isSnippetTab(tab)) queueMicrotask(showTeamTab);
 }
 function chooseRightTab(tab) {
   showRightTab(tab);
@@ -818,6 +968,8 @@ $('tab-web').addEventListener('click', () => {
   if (!$('web-address').value) $('web-address').focus();
 });
 $('tab-runsheet').addEventListener('click', () => chooseRightTab('runsheet'));
+$('tab-team').addEventListener('click', () => chooseRightTab('team'));
+$('tab-personal').addEventListener('click', () => chooseRightTab('personal'));
 
 // --- Web tab -------------------------------------------------------------------------------
 // The page is a native view that follows #web-slot, like the chat. See ADR 0005 for what a page
@@ -902,7 +1054,9 @@ showRightTab(rightTab);
 // A script shown read-only. Copying from it works like copying from the chat: the text goes to
 // the airlock and nothing runs until the user presses Run.
 
-const RUNSHEET_LINE_HEIGHT = 20; // keep in sync with #runsheet-content in style.css
+// Lines are a fixed height so the mouse position gives the line. It grows with the text size,
+// which sets --runsheet-line-height for style.css.
+let runsheetLineHeight = 20;
 const RUNSHEET_PADDING = 8;
 const RUNSHEET_EXTENSIONS = {
   sh: 'bash', bash: 'bash', zsh: 'bash', ksh: 'bash', command: 'bash',
@@ -1039,6 +1193,7 @@ function renderScript(text, language) {
   // Highlight.js escapes the file's text, so its output is safe to insert as HTML.
   $('runsheet-code').firstElementChild.innerHTML = hljs.highlight(runsheetLines.join('\n'), { language, ignoreIllegals: true }).value;
   $('runsheet-gutter').textContent = runsheetLines.map((_line, i) => i + 1).join('\n');
+  gutterAnchor = null;
   showBlock(null);
 }
 
@@ -1062,16 +1217,19 @@ function renderMarkdown(text, baseUrl) {
     if (language && hljs.getLanguage(language)) {
       code.innerHTML = hljs.highlight(code.textContent, { language, ignoreIllegals: true }).value; // escaped, as above
     }
+    const actions = document.createElement('div');
+    actions.className = 'block-actions';
     const copy = document.createElement('button');
-    copy.className = 'block-copy';
     copy.textContent = 'Copy';
-    copy.title = 'Copy this block to the clipboard and the airlock. Copy twice quickly to run it.';
-    copy.addEventListener('click', () => {
-      copyFromRunsheet(code.textContent.replace(/\n$/, ''));
-      copy.textContent = 'Copied';
-      setTimeout(() => { copy.textContent = 'Copy'; }, DOUBLE_COPY_MS);
-    });
-    code.parentElement.append(copy);
+    copy.title = 'Copy this block to the clipboard and the airlock';
+    const run = document.createElement('button');
+    run.textContent = 'Run';
+    run.title = 'Run this block in the terminal';
+    const text = () => code.textContent.replace(/\n$/, '');
+    copy.addEventListener('click', () => copyBlock(text(), copy));
+    run.addEventListener('click', () => runText(text()));
+    actions.append(copy, run);
+    code.parentElement.append(actions);
   }
 }
 
@@ -1132,27 +1290,79 @@ function runsheetSelection() {
   return selected.toString();
 }
 
-// Copying from a runsheet works like copying in the chat, including double-copy.
-function copyFromRunsheet(text) {
+// A block's Copy button copies to the clipboard and the airlock. It never runs anything: that's
+// what the Run button beside it is for.
+function copyBlock(text, button) {
   navigator.clipboard.writeText(text);
-  receiveCopy(text, window.airlock.copyGesture());
+  fillAirlock(text);
+  setStatus('Sent to Airlock', DOUBLE_COPY_MS);
+  button.textContent = 'Copied';
+  setTimeout(() => { button.textContent = 'Copy'; }, DOUBLE_COPY_MS);
 }
+
+// Copying from a runsheet works like copying in the chat, including double-copy.
 for (const id of ['runsheet-code', 'runsheet-page']) {
   $(id).addEventListener('copy', () => {
     const selected = runsheetSelection();
     if (selected.trim()) receiveCopy(selected, window.airlock.copyGesture());
   });
 }
-// Pressing the button mustn't clear the selection it's about to send.
-$('runsheet-airlock').addEventListener('mousedown', (e) => e.preventDefault());
+// Pressing these buttons mustn't clear the selection they're about to send.
+for (const id of ['runsheet-airlock', 'runsheet-run-selection']) $(id).addEventListener('mousedown', (e) => e.preventDefault());
+// To airlock counts as a copy: pressed twice quickly on the same text, it runs (ADR 0005).
 $('runsheet-airlock').addEventListener('click', () => {
   const selected = runsheetSelection();
-  if (selected.trim()) {
-    fillAirlock(selected);
-    setStatus('Sent to Airlock', DOUBLE_COPY_MS);
-  } else {
-    toast('Highlight the text to send first.', { error: true });
+  if (selected.trim()) receiveCopy(selected, window.airlock.copyGesture(), { again: 'press again quickly to auto-run' });
+  else toast('Highlight the text to send first.', { error: true });
+});
+$('runsheet-run-selection').addEventListener('click', () => {
+  const selected = runsheetSelection();
+  if (selected.trim()) runText(selected);
+  else toast('Highlight the text to run first.', { error: true });
+});
+
+// Clicking a line number selects that whole line. Shift+click, or dragging down the numbers,
+// selects every line in between.
+let gutterAnchor = null;
+function lineAt(clientY) {
+  const y = clientY - $('runsheet-content').getBoundingClientRect().top - RUNSHEET_PADDING;
+  return Math.min(Math.max(Math.floor(y / runsheetLineHeight), 0), runsheetLines.length - 1);
+}
+function selectRunsheetLines(a, b) {
+  const [first, last] = a <= b ? [a, b] : [b, a];
+  const lineStart = (i) => runsheetLines.slice(0, i).reduce((n, line) => n + line.length + 1, 0);
+  const start = lineStart(first);
+  const end = lineStart(last) + runsheetLines[last].length;
+  // Highlighting splits the text across many nodes; find the ones holding each end.
+  const code = $('runsheet-code').firstElementChild;
+  const range = document.createRange();
+  range.selectNodeContents(code);
+  const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
+  let offset = 0;
+  let startFound = false;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!startFound && start <= offset + node.length) { range.setStart(node, start - offset); startFound = true; }
+    if (end <= offset + node.length) { range.setEnd(node, end - offset); break; }
+    offset += node.length;
   }
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+}
+$('runsheet-gutter').addEventListener('mousedown', (e) => {
+  if (e.button !== 0 || !runsheetLines.length) return;
+  e.preventDefault();
+  $('runsheet-view').focus({ preventScroll: true }); // so Ctrl+C copies the selection
+  const line = lineAt(e.clientY);
+  if (!e.shiftKey || gutterAnchor === null) gutterAnchor = line;
+  selectRunsheetLines(gutterAnchor, line);
+  const move = (m) => selectRunsheetLines(gutterAnchor, lineAt(m.clientY));
+  const up = () => {
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+  };
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
 });
 // Links open in the system browser, never inside the app.
 $('runsheet-page').addEventListener('click', (e) => {
@@ -1166,32 +1376,379 @@ $('runsheet-page').addEventListener('click', (e) => {
 function showBlock(block) {
   hoveredBlock = block;
   $('runsheet-band').hidden = !block;
-  $('runsheet-copy').hidden = !block;
+  $('runsheet-block-actions').hidden = !block;
   if (!block) return;
-  const top = RUNSHEET_PADDING + block[0] * RUNSHEET_LINE_HEIGHT;
+  const top = RUNSHEET_PADDING + block[0] * runsheetLineHeight;
   $('runsheet-band').style.top = `${top}px`;
-  $('runsheet-band').style.height = `${(block[1] - block[0] + 1) * RUNSHEET_LINE_HEIGHT}px`;
-  // The button sits outside the scrolling area so it stays in view, whatever the scroll position.
-  $('runsheet-copy').style.top = `${Math.max(top - $('runsheet-scroll').scrollTop, 0) + 2}px`;
+  $('runsheet-band').style.height = `${(block[1] - block[0] + 1) * runsheetLineHeight}px`;
+  // The buttons sit outside the scrolling area so they stay in view, whatever the scroll position.
+  $('runsheet-block-actions').style.top = `${Math.max(top - $('runsheet-scroll').scrollTop, 0) + 2}px`;
   $('runsheet-copy').textContent = 'Copy';
 }
 $('runsheet-scroll').addEventListener('mousemove', (e) => {
   if (e.buttons) return; // selecting text
   const y = e.clientY - $('runsheet-content').getBoundingClientRect().top - RUNSHEET_PADDING;
-  const line = Math.floor(y / RUNSHEET_LINE_HEIGHT);
+  const line = Math.floor(y / runsheetLineHeight);
   const block = runsheetBlocks.find(([first, last]) => line >= first && line <= last) ?? null;
   if (block !== hoveredBlock) showBlock(block);
 });
 $('runsheet-scroll').addEventListener('scroll', () => { if (hoveredBlock) showBlock(hoveredBlock); });
 $('runsheet-view').addEventListener('mouseleave', () => showBlock(null));
-$('runsheet-copy').addEventListener('click', () => {
-  if (!hoveredBlock) return;
-  copyFromRunsheet(runsheetLines.slice(hoveredBlock[0], hoveredBlock[1] + 1).join('\n'));
-  $('runsheet-copy').textContent = 'Copied';
+const hoveredText = () => runsheetLines.slice(hoveredBlock[0], hoveredBlock[1] + 1).join('\n');
+$('runsheet-copy').addEventListener('click', () => { if (hoveredBlock) copyBlock(hoveredText(), $('runsheet-copy')); });
+$('runsheet-run').addEventListener('click', () => { if (hoveredBlock) runText(hoveredText()); });
+
+// Text size: the script's lines and line numbers, or the whole formatted page.
+paneZoom($('runsheet'), 'runsheetFontSize', (size) => {
+  runsheetLineHeight = Math.round((size * 20) / DEFAULT_FONT_SIZE);
+  root.setProperty('--runsheet-font-size', `${size}px`);
+  root.setProperty('--runsheet-line-height', `${runsheetLineHeight}px`);
+  root.setProperty('--runsheet-zoom', String(size / DEFAULT_FONT_SIZE));
+  if (hoveredBlock) showBlock(hoveredBlock);
 });
 syncRunsheetLayout();
 loadRunsheetList();
 reloadRunsheet();
+
+// --- Personal Snippets: snippets kept in git repos ----------------------------------------
+// One combined list from every repo in Settings (ADR 0006). Like the Runsheet, nothing here runs
+// on its own: Copy sends to the airlock and Run is an explicit click.
+
+const TEAM_REFRESH_MS = 5 * 60 * 1000;
+const snippetRepos = () => prefs.snippetRepos ?? [];
+const KIND_NAMES = { team: 'Team', personal: 'Personal' };
+const shownKind = () => (rightTab === 'personal' ? 'personal' : 'team');
+const tabRepos = () => snippetRepos().filter((r) => r.kind === shownKind());
+let paneKind = null; // which tab the pane was last showing
+const repoLabel = (id) => snippetRepos().find((r) => r.id === id)?.label ?? id;
+const repoState = new Map(); // repo id → { list, error, loadedAt, busy }
+let teamEditing = null; // { repo, file, base } of the snippet being edited; file is null for a new one
+
+// The first heading is the name and the first code block the command; anything else is ignored.
+function parseTeamSnippet({ file, text, by, at }, repo) {
+  const tokens = marked.lexer(text);
+  const heading = tokens.find((t) => t.type === 'heading');
+  const code = tokens.find((t) => t.type === 'code');
+  return { repo, file, text, by, at, name: heading?.text.trim() || file.replace(/\.md$/, ''), command: code?.text ?? '' };
+}
+
+function showTeamState() {
+  const states = tabRepos().map((r) => repoState.get(r.id) ?? {});
+  const failed = tabRepos().filter((r) => repoState.get(r.id)?.error).map((r) => r.label);
+  const el = $('team-state');
+  el.textContent = states.some((s) => s.busy) ? 'Syncing…'
+    : failed.length ? `Couldn't sync ${failed.join(', ')}`
+      : states.some((s) => s.loadedAt) ? `Synced ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
+  el.title = el.textContent;
+  el.classList.toggle('error', failed.length > 0);
+}
+
+async function loadRepo(repo) {
+  const state = repoState.get(repo.id) ?? {};
+  if (state.busy) return;
+  repoState.set(repo.id, { ...state, busy: true });
+  showTeamState();
+  const { list, error } = await window.airlock.teamList(repo.id);
+  if (!snippetRepos().some((r) => r.id === repo.id)) return; // removed meanwhile
+  const next = { ...repoState.get(repo.id), busy: false, error: error ?? '' };
+  if (list) Object.assign(next, { list: list.map((s) => parseTeamSnippet(s, repo.id)), loadedAt: Date.now() });
+  repoState.set(repo.id, next);
+  if (repo.kind !== shownKind()) return;
+  showTeamState();
+  renderTeam();
+}
+const loadTeam = () => Promise.all(tabRepos().map(loadRepo));
+
+function teamMessage(text, button) {
+  const li = document.createElement('li');
+  li.className = 'message';
+  li.textContent = text;
+  if (button) li.append(' ', button);
+  return li;
+}
+
+function teamButton(label, title, onClick) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  if (title) b.title = title;
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+function teamEntry(s) {
+  const li = document.createElement('li');
+  const head = document.createElement('div');
+  head.className = 'head';
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = s.name;
+  head.append(name);
+  if (tabRepos().length > 1) {
+    const repo = document.createElement('span');
+    repo.className = 'repo';
+    repo.textContent = repoLabel(s.repo);
+    head.append(repo);
+  }
+  if (s.by) {
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = `${s.by} · ${ago(s.at)}`;
+    meta.title = `Last changed by ${s.by}, ${new Date(s.at).toLocaleString()}`;
+    head.append(meta);
+  }
+  const edit = teamButton('Edit', '', () => openTeamForm({ repo: s.repo, file: s.file, base: s.text, name: s.name, command: s.command }));
+  // Delete asks for a second click rather than a dialog.
+  let armed = null;
+  const del = teamButton('Delete', `Delete from ${repoLabel(s.repo)}`, async () => {
+    if (!armed) {
+      del.textContent = 'Delete?';
+      del.classList.add('confirm');
+      armed = setTimeout(() => { armed = null; del.textContent = 'Delete'; del.classList.remove('confirm'); }, 3000);
+      return;
+    }
+    clearTimeout(armed);
+    del.disabled = true;
+    const result = await window.airlock.teamDelete({ repo: s.repo, file: s.file, base: s.text, name: s.name });
+    if (result.error) toast(result.error, { error: true });
+    else if (result.conflict) toast(`Someone else changed "${s.name}", so it wasn't deleted. Check their version first.`, { error: true });
+    else setStatus(`Deleted "${s.name}" from ${repoLabel(s.repo)}`, STATUS_RAN_MS);
+    loadRepo(snippetRepos().find((r) => r.id === s.repo));
+  });
+  head.append(edit, del);
+
+  const pre = document.createElement('pre');
+  const code = document.createElement('code');
+  code.textContent = s.command;
+  const actions = document.createElement('div');
+  actions.className = 'block-actions';
+  const copy = teamButton('Copy', 'Copy this snippet to the clipboard and the airlock', () => copyBlock(s.command, copy));
+  const run = teamButton('Run', 'Run this snippet in the terminal', () => runText(s.command));
+  actions.append(copy, run);
+  pre.append(code, actions);
+  li.append(head, pre);
+  return li;
+}
+
+// The repo pickers follow Settings: the filter above the list and the one in the form.
+function fillRepoPickers() {
+  const repos = tabRepos();
+  const option = (value, text) => Object.assign(document.createElement('option'), { value, textContent: text });
+  const filter = $('team-repo-filter');
+  const shown = filter.value;
+  filter.replaceChildren(option('', 'All repos'), ...repos.map((r) => option(r.id, r.label)));
+  filter.value = repos.some((r) => r.id === shown) ? shown : '';
+  filter.hidden = repos.length < 2;
+  const picker = $('team-repo');
+  const picked = picker.value;
+  picker.replaceChildren(...repos.map((r) => option(r.id, r.label)));
+  if (repos.some((r) => r.id === picked)) picker.value = picked;
+  picker.hidden = repos.length < 2;
+}
+
+function renderTeam() {
+  const list = $('team-list');
+  const repos = tabRepos();
+  $('team-new').disabled = !repos.length;
+  $('team-reload').disabled = !repos.length;
+  if (!repos.length) {
+    showTeamState();
+    const open = teamButton('Open Settings', '', () => showView('settings'));
+    list.replaceChildren(teamMessage(`Add a git repo in Settings and set it to show in ${KIND_NAMES[shownKind()]} Snippets.`, open));
+    return;
+  }
+  const only = $('team-repo-filter').value;
+  const words = $('team-filter').value.toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = repos.filter((r) => !only || r.id === only)
+    .flatMap((r) => repoState.get(r.id)?.list ?? [])
+    .filter((s) => {
+      const hay = `${s.name}\n${s.command}\n${s.by ?? ''}`.toLowerCase();
+      return words.every((w) => hay.includes(w));
+    })
+    .sort((a, b) => a.name.localeCompare(b.name) || repoLabel(a.repo).localeCompare(repoLabel(b.repo)));
+  const rows = shown.map(teamEntry);
+  const errors = repos.filter((r) => (!only || r.id === only) && repoState.get(r.id)?.error);
+  rows.unshift(...errors.map((r) => teamMessage(`${r.label}: ${repoState.get(r.id).error}`)));
+  if (!rows.length) {
+    const loaded = repos.some((r) => repoState.get(r.id)?.loadedAt);
+    rows.push(teamMessage(!loaded ? 'Loading…'
+      : words.length ? 'No snippets match.' : 'No snippets yet. Press New, or Save to Repo in the airlock.'));
+  }
+  list.replaceChildren(...rows);
+}
+
+// A new snippet goes to the repo picked in the form, which starts on the last one used. An
+// existing one stays in its own repo.
+function openTeamForm({ repo = null, file = null, base = null, name = '', command = '' } = {}) {
+  fillRepoPickers();
+  const repos = tabRepos();
+  const start = repo ?? (repos.some((r) => r.id === prefs.lastSnippetRepo) ? prefs.lastSnippetRepo : repos[0]?.id);
+  teamEditing = { file, base };
+  $('team-repo').value = start;
+  $('team-repo').disabled = Boolean(file);
+  $('team-name').value = name;
+  $('team-command').value = command;
+  $('team-form-note').textContent = '';
+  $('team-form').hidden = false;
+  $('team-new').hidden = true;
+  (name ? $('team-command') : $('team-name')).focus();
+}
+function closeTeamForm() {
+  teamEditing = null;
+  $('team-form').hidden = true;
+  $('team-new').hidden = false;
+}
+
+$('team-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const name = $('team-name').value.trim();
+  const command = $('team-command').value.replace(/\s+$/, '');
+  const repo = $('team-repo').value;
+  if (!name || !command || !repo || !teamEditing) return;
+  $('team-save').disabled = true;
+  const result = await window.airlock.teamSave({ ...teamEditing, repo, name, command });
+  $('team-save').disabled = false;
+  const repoObject = snippetRepos().find((r) => r.id === repo);
+  if (result.error) {
+    toast(`${repoLabel(repo)}: ${result.error}`, { error: true });
+    return;
+  }
+  if (result.conflict) {
+    // Keep the user's text. Saving again replaces the other version, or adds a deleted one back.
+    if (result.text === null) {
+      teamEditing = { file: null, base: null };
+      $('team-form-note').textContent = 'Someone else deleted this snippet. Save again to add it back.';
+    } else {
+      teamEditing.base = result.text;
+      const theirs = parseTeamSnippet({ file: teamEditing.file, text: result.text }, repo);
+      $('team-form-note').textContent = `Someone else changed this since you opened it (now: ${theirs.command.split('\n')[0]}). Save again to replace theirs, or Cancel to keep it.`;
+    }
+    if (repoObject) loadRepo(repoObject);
+    return;
+  }
+  if (!teamEditing.file) saveSetting('lastSnippetRepo', repo);
+  setStatus(`Saved "${name}" to ${repoLabel(repo)}`, STATUS_RAN_MS);
+  closeTeamForm();
+  if (repoObject) loadRepo(repoObject);
+});
+$('team-cancel').addEventListener('click', closeTeamForm);
+$('team-new').addEventListener('click', () => openTeamForm());
+$('team-reload').addEventListener('click', loadTeam);
+$('team-filter').addEventListener('input', renderTeam);
+$('team-repo-filter').addEventListener('change', renderTeam);
+// Copying part of a command works like copying in the chat, including double-copy.
+$('team-list').addEventListener('copy', () => {
+  const selected = window.getSelection().toString();
+  if (selected.trim()) receiveCopy(selected, window.airlock.copyGesture());
+});
+
+function showTeamTab() {
+  if (paneKind !== shownKind()) {
+    paneKind = shownKind();
+    closeTeamForm();
+    $('team-filter').value = '';
+    $('team-filter').placeholder = `Search ${KIND_NAMES[paneKind].toLowerCase()} snippets`;
+  }
+  fillRepoPickers();
+  renderTeam();
+  const stale = (r) => Date.now() - (repoState.get(r.id)?.loadedAt ?? 0) > 30000;
+  tabRepos().filter(stale).forEach(loadRepo);
+}
+setInterval(() => { if (isSnippetTab(rightTab) && !document.hidden) loadTeam(); }, TEAM_REFRESH_MS);
+
+// From the airlock: opens a snippets tab with the command filled in, to name it and pick the repo.
+// That's the snippets tab showing, or else the one with the repo used last.
+$('save-team').addEventListener('click', () => {
+  const command = airlockText.value.replace(/\s+$/, '');
+  if (!command.trim()) { toast('Put the command in the airlock first.', { error: true }); return; }
+  const last = snippetRepos().find((r) => r.id === prefs.lastSnippetRepo);
+  const kind = isSnippetTab(rightTab) ? rightTab : last?.kind ?? 'team';
+  if (kind !== rightTab) chooseRightTab(kind);
+  showTeamTab();
+  openTeamForm({ name: snippetForm.hidden ? '' : $('snippet-name').value.trim(), command });
+  if (!$('team-name').value) $('team-name').focus();
+});
+
+// Settings: the list of repos. Each field saves when it changes; a repo is only saved once it has
+// a label and a valid address, so a half-filled one stays here until it's finished.
+const REPO_URL = /^(https:\/\/|ssh:\/\/|git@|file:\/\/)\S+$/;
+const repoProblem = (r) => (!r.label.trim() ? 'needs a label'
+  : !REPO_URL.test(r.url) ? 'needs a git address starting with https://, ssh:// or git@'
+    : /["$`]/.test(r.sshKey ?? '') ? 'has an SSH key path with a quote or $ in it' : '');
+let repoDrafts = snippetRepos().map((r) => ({ ...r }));
+
+function saveRepos() {
+  const valid = repoDrafts.filter((r) => !repoProblem(r)).map((r) => {
+    const clean = { id: r.id, label: r.label.trim(), url: r.url.trim(), kind: r.kind };
+    for (const key of ['name', 'email', 'sshKey']) if (r[key]?.trim()) clean[key] = r[key].trim();
+    return clean;
+  });
+  const before = JSON.stringify(snippetRepos());
+  if (JSON.stringify(valid) === before) return;
+  saveSetting('snippetRepos', valid);
+  // Forget what was loaded from repos that changed, so the list never mixes old and new.
+  const old = new Map(JSON.parse(before).map((r) => [r.id, JSON.stringify(r)]));
+  for (const r of valid) if (old.get(r.id) !== JSON.stringify(r)) repoState.delete(r.id);
+  for (const id of repoState.keys()) if (!valid.some((r) => r.id === id)) repoState.delete(id);
+  fillRepoPickers();
+  if (isSnippetTab(rightTab)) showTeamTab();
+}
+
+function renderRepoSettings() {
+  const sets = repoDrafts.map((r, i) => {
+    const set = document.createElement('fieldset');
+    const legend = document.createElement('legend');
+    legend.textContent = r.label.trim() || `Repo ${i + 1}`;
+    set.append(legend);
+    const field = (key, label, placeholder) => {
+      const id = `repo-${r.id}-${key}`;
+      const l = Object.assign(document.createElement('label'), { htmlFor: id, textContent: label });
+      const input = Object.assign(document.createElement('input'), { id, type: 'text', spellcheck: false, placeholder, value: r[key] ?? '' });
+      input.addEventListener('change', () => {
+        r[key] = input.value;
+        legend.textContent = r.label.trim() || `Repo ${i + 1}`;
+        const problem = repoProblem(r);
+        problemLine.textContent = problem ? `Not saved yet: this repo ${problem}.` : '';
+        saveRepos();
+      });
+      set.append(l, input);
+    };
+    field('label', 'Label', 'Work');
+    const kindId = `repo-${r.id}-kind`;
+    const kindLabel = Object.assign(document.createElement('label'), { htmlFor: kindId, textContent: 'Show in' });
+    const kind = Object.assign(document.createElement('select'), { id: kindId });
+    for (const [value, text] of Object.entries(KIND_NAMES)) kind.append(Object.assign(document.createElement('option'), { value, textContent: `${text} Snippets` }));
+    kind.value = r.kind;
+    kind.addEventListener('change', () => { r.kind = kind.value; saveRepos(); });
+    set.append(kindLabel, kind);
+    field('url', 'Address', 'https://github.com/owner/snippets.git');
+    field('name', 'Commit name', 'Blank: your global git name');
+    field('email', 'Commit email', 'Blank: your global git email');
+    field('sshKey', 'SSH key', 'Optional, for git@ addresses: C:\\Users\\you\\.ssh\\id_ed25519');
+    const problemLine = document.createElement('span');
+    problemLine.className = 'hint';
+    problemLine.style.gridColumn = '1 / -1';
+    const problem = repoProblem(r);
+    if (problem && r.url) problemLine.textContent = `Not saved yet: this repo ${problem}.`;
+    const remove = teamButton('Remove', 'Remove this repo from the app. Nothing on the server changes.', () => {
+      repoDrafts = repoDrafts.filter((d) => d !== r);
+      renderRepoSettings();
+      saveRepos();
+    });
+    remove.className = 'remove';
+    set.append(problemLine, remove);
+    return set;
+  });
+  $('setting-repos').replaceChildren(...sets);
+}
+$('setting-repo-add').addEventListener('click', () => {
+  const id = Math.random().toString(36).slice(2, 10);
+  // The first goes to Team Snippets; after that, wherever there's nothing yet.
+  const hasTeam = repoDrafts.some((r) => r.kind === 'team');
+  repoDrafts.push({ id, label: hasTeam ? '' : 'Team', url: '', kind: hasTeam ? 'personal' : 'team' });
+  renderRepoSettings();
+  $(`repo-${id}-${repoDrafts.length > 1 ? 'label' : 'url'}`).focus();
+});
+renderRepoSettings();
 
 // --- Settings panel -----------------------------------------------------------------------
 

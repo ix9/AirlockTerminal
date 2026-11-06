@@ -29,8 +29,9 @@
         <select id="aws" title="AWS profile: sets AWS_PROFILE in this terminal">
           <option value="">AWS profile…</option>
         </select>
+        <!-- In the toolbar row, so a change in the environment never resizes the terminal. -->
+        <div id="envbar" hidden></div>
       </header>
-      <div id="envbar" hidden></div>
       <div id="terminal-wrap">
         <div id="terminal"></div>
         <div id="scratchpad" hidden>
@@ -94,6 +95,18 @@
               at the same time, the last save wins. History and the scratchpad always stay on this machine.</p>
           </section>
           <section>
+            <h2>Snippet repos</h2>
+            <div id="setting-repos"></div>
+            <div class="row"><button id="setting-repo-add">Add repo</button></div>
+            <p class="hint">Git repos on any host. Each shows in the Team Snippets or Personal Snippets tab, and a tab with
+              several repos lists them together. Each snippet is a
+              Markdown file in the repo's <code>snippets</code> folder. Commits use the name and email given here,
+              or your global git ones if they're blank.</p>
+            <p class="hint">To sign in as a different GitHub account for one repo, put that account's username in
+              the address, like <code>https://username@github.com/owner/repo.git</code>, and Git Credential Manager
+              keeps its sign-in separate. For an SSH address, give the key file instead.</p>
+          </section>
+          <section>
             <h2>Data folder</h2>
             <div class="row"><code id="data-dir"></code></div>
             <div class="row"><button id="data-open">Open</button></div>
@@ -111,18 +124,27 @@
           </nav>
           <input id="filter" type="search" placeholder="Filter" spellcheck="false">
           <ul id="library-list"></ul>
+          <label id="other-folders-row" title="List snippets saved for other folders at the bottom">
+            <input id="other-folders" type="checkbox"> Show other folders' snippets
+          </label>
         </aside>
         <div id="airlock-main">
           <header>
             <span class="section-title">Airlock</span>
             <form id="snippet-form" hidden>
               <input id="snippet-name" placeholder="Snippet name" spellcheck="false" required>
+              <select id="snippet-scope" aria-label="Where the snippet shows">
+                <option value="all">Everywhere</option>
+                <option value="cwd">This folder only</option>
+              </select>
               <button type="submit">Save</button>
               <button type="button" id="snippet-cancel">Cancel</button>
             </form>
             <button id="save-snippet" title="Save the airlock text as a snippet">Save snippet</button>
+            <button id="save-team" class="team" title="Save the airlock text to a Team or Personal snippet repo">Save to Repo</button>
             <button id="paste">Paste</button>
             <button id="clear">Clear</button>
+            <button id="run-selection" title="Send only the highlighted text to the terminal (Ctrl+Shift+Enter)">Run selection</button>
             <button id="run" class="primary" title="Send to terminal (Ctrl+Enter)">Run ⏎</button>
           </header>
           <textarea id="airlock-text" spellcheck="false"
@@ -136,6 +158,8 @@
         <button id="tab-claude" class="tab">Claude</button>
         <button id="tab-web" class="tab" title="Browse any site and copy commands from it">Web</button>
         <button id="tab-runsheet" class="tab" title="A script to work through, read-only">Runsheet</button>
+        <button id="tab-team" class="tab" title="Snippets shared with your team through git repos">Team Snippets</button>
+        <button id="tab-personal" class="tab" title="Your own snippets, kept in git repos">Personal Snippets</button>
       </nav>
       <div id="right-body">
         <section id="chat"></section>
@@ -161,7 +185,8 @@
             <span id="runsheet-lang"></span>
             <span class="spacer"></span>
             <button id="runsheet-reload" title="Read the file again">Reload</button>
-            <button id="runsheet-airlock" class="primary" title="Send the highlighted text to the airlock. This never runs it.">To airlock</button>
+            <button id="runsheet-run-selection" title="Run the highlighted text in the terminal">Run selection</button>
+            <button id="runsheet-airlock" class="primary" title="Send the highlighted text to the airlock. Press twice quickly to run it.">To airlock</button>
           </header>
           <div id="runsheet-files">
             <div class="pad-bar">
@@ -171,7 +196,7 @@
             </div>
             <ul id="runsheet-list"></ul>
           </div>
-          <div id="runsheet-view" hidden>
+          <div id="runsheet-view" tabindex="-1" hidden>
             <div id="runsheet-scroll">
               <div id="runsheet-content">
                 <div id="runsheet-band" hidden></div>
@@ -179,9 +204,36 @@
                 <pre id="runsheet-code"><code></code></pre>
               </div>
             </div>
-            <button id="runsheet-copy" hidden title="Copy this block to the clipboard and the airlock. Copy twice quickly to run it.">Copy</button>
+            <div id="runsheet-block-actions" class="block-actions" hidden>
+              <button id="runsheet-copy" title="Copy this block to the clipboard and the airlock">Copy</button>
+              <button id="runsheet-run" title="Run this block in the terminal">Run</button>
+            </div>
           </div>
-          <article id="runsheet-page" hidden></article>
+          <article id="runsheet-page" tabindex="-1" hidden></article>
+        </div>
+        <div id="team" hidden>
+          <header id="team-bar" class="pad-bar">
+            <input id="team-filter" type="search" placeholder="Search names and commands" spellcheck="false" aria-label="Search snippets">
+            <select id="team-repo-filter" aria-label="Show snippets from"></select>
+            <span id="team-state"></span>
+            <span class="spacer"></span>
+            <button id="team-reload" title="Get the latest from every repo">Reload</button>
+            <button id="team-new" class="team">New</button>
+          </header>
+          <form id="team-form" hidden>
+            <div class="row">
+              <input id="team-name" placeholder="Snippet name" spellcheck="false" maxlength="200" required aria-label="Name">
+              <select id="team-repo" aria-label="Repo"></select>
+            </div>
+            <textarea id="team-command" placeholder="The command it runs" spellcheck="false" required aria-label="Command"></textarea>
+            <div class="row">
+              <span id="team-form-note"></span>
+              <span class="spacer"></span>
+              <button type="button" id="team-cancel">Cancel</button>
+              <button type="submit" id="team-save" class="team">Save</button>
+            </div>
+          </form>
+          <ul id="team-list"></ul>
         </div>
       </div>
     </section>
@@ -215,6 +267,7 @@
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
   <script src="../../node_modules/@xterm/addon-serialize/lib/addon-serialize.js"></script>
+  <script src="../../node_modules/@xterm/addon-unicode-graphemes/lib/addon-unicode-graphemes.js"></script>
   <script src="../../node_modules/marked/lib/marked.umd.js"></script>
   <script src="../../node_modules/dompurify/dist/purify.min.js"></script>
   <script src="../../node_modules/@highlightjs/cdn-assets/highlight.min.js"></script>
