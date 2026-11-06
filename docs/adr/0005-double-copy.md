@@ -24,7 +24,9 @@ Copying the same text twice within 1.5 seconds runs it. Both copies must be real
   airlock, but can't run anything.
 - **The text must match exactly.**
 - **A third copy starts over,** so repeated presses don't run a command repeatedly.
-- **`To airlock` never runs anything,** even when double-clicked.
+- **The runsheet's `To airlock` counts as a copy,** so pressing it twice quickly on the same
+  selection runs it, by the same rules. (Changed 2026-11-06 at the user's request; it used to never
+  run anything.) A block's `Copy` button never runs anything; its `Run` button runs the block.
 - **It can be turned off** in Settings. It's on by default, because the user asked for it.
 
 The status bar shows when the first copy landed and what ran. Runs are recorded in History. Focus
