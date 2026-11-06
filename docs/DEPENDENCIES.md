@@ -18,7 +18,7 @@ All versions are pinned exactly in `package.json`.
 | Node.js (dev) | 24.x | Running npm and Electron in development | MIT |
 
 Shells (provided by the OS): `pwsh` / `powershell.exe` and `wsl.exe` on Windows, and the
-shells in `/etc/shells` on macOS and Linux.
+shells in `/etc/shells`, plus `pwsh` if it's installed, on macOS and Linux.
 
 `git` on the PATH, for Team snippets only ([ADR 0006](adr/0006-team-snippets.md)). It uses the
 person's own git sign-in (Git Credential Manager or SSH keys).
@@ -28,6 +28,6 @@ claude.ai's usage endpoint with the same session ([ADR 0003](adr/0003-claude-usa
 Other network calls: the team snippets repo set in Settings (through `git`), the Web tab loads the addresses you enter (text that isn't an address is sent
 to Google as a search), and Markdown runsheets load any remote images they contain.
 
-Local files read: `~/.aws/config` (profile names only), the names and contents of files in the chosen Runsheet folder, and the `README.md` of the git repository the terminal is in (its code blocks become snippets). Files written in the app's user data
+Local files read: `~/.aws/config` (profile names only), the names and contents of files in the chosen Runsheet folder, and the `README.md` of the git repository the terminal is in (its code blocks become snippets). Files in the Runsheet folder are written only when you press Save while editing one. Files written in the app's user data
 folder: `settings.json`, `snippets.json` (or in a folder chosen in Settings), `team-snippets/` (a clone of the team repo), and, readable only
 by the user, `history.jsonl`, `scratchpad.json` and `scrollback.json` (only if turned on).

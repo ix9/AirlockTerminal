@@ -142,11 +142,14 @@ nativeTheme.on('updated', pushTheme);
 // Shells can't read inside the asar archive, so packaged builds keep these scripts beside it.
 const INTEGRATION_DIR = path.join(__dirname, 'shell-integration').replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
 
+const PWSH_DIRS = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/local/microsoft/powershell/7', '/usr/bin', '/snap/bin', '/opt/microsoft/powershell/7'];
+const isPwsh = (shellPath) => shellPath.split('/').pop() === 'pwsh';
+
 function listShells() {
   const shells = [];
+  const ps1 = path.join(INTEGRATION_DIR, 'airlock.ps1').replace(/'/g, "''");
+  const psArgs = ['-NoLogo', '-NoExit', '-Command', `. '${ps1}'`];
   if (process.platform === 'win32') {
-    const ps1 = path.join(INTEGRATION_DIR, 'airlock.ps1').replace(/'/g, "''");
-    const psArgs = ['-NoLogo', '-NoExit', '-Command', `. '${ps1}'`];
     try {
       execFileSync('where.exe', ['pwsh'], { stdio: 'ignore' });
       shells.push({ id: 'pwsh', label: 'PowerShell 7', kind: 'pwsh', file: 'pwsh.exe', args: psArgs });
@@ -166,7 +169,16 @@ function listShells() {
       for (const line of fs.readFileSync('/etc/shells', 'utf8').split('\n'))
         if (line.startsWith('/') && fs.existsSync(line.trim())) paths.add(line.trim());
     } catch {}
-    for (const p of paths) shells.push({ id: p, label: p, kind: 'unix', file: p });
+    // PowerShell's installers don't add it to /etc/shells. An app opened from the Finder gets a
+    // short PATH that leaves out Homebrew, so look in the usual places too.
+    if (![...paths].some(isPwsh)) {
+      const pwsh = [...(process.env.PATH ?? '').split(':').filter(Boolean), ...PWSH_DIRS].map((dir) => `${dir}/pwsh`).find((p) => fs.existsSync(p));
+      if (pwsh) paths.add(pwsh);
+    }
+    for (const p of paths) {
+      // -Login has to come first. It gives pwsh the PATH a login shell would have.
+      shells.push(isPwsh(p) ? { id: p, label: p, kind: 'pwsh', file: p, args: ['-Login', ...psArgs] } : { id: p, label: p, kind: 'unix', file: p });
+    }
   }
   return shells;
 }
@@ -227,6 +239,11 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   uiGesture = trackCopyGestures(win.webContents);
   win.on('close', () => { rememberWindow(); flushSettings(); });
+  // The renderer holds the window open while the Runsheet has unsaved edits. Unload events can't
+  // wait, so this dialog has to be the blocking kind.
+  win.webContents.on('will-prevent-unload', (e) => {
+    if (dialog.showMessageBoxSync(win, DISCARD_EDITS) === 0) e.preventDefault();
+  });
   win.loadFile(path.join(__dirname, 'ui', 'index.html'));
 
   // Chat pane: an external site in its own persistent session, laid over the UI's placeholder.
@@ -821,9 +838,13 @@ ipcMain.on('history:add', (e, command) => {
   fs.appendFile(dataFile('history.jsonl'), `${JSON.stringify(entry)}\n`, PRIVATE_FILE, () => {});
 });
 
-// --- Runsheet: a script shown read-only in the right pane -----------------------------------
+// --- Runsheet: a script to read or edit in the right pane -------------------------------------
 // The UI only ever names a file from the listing of the folder the user chose.
 
+const DISCARD_EDITS = {
+  type: 'warning', message: 'Discard your changes to this file?', buttons: ['Discard', 'Keep Editing'], defaultId: 1, cancelId: 1,
+};
+const confirmDiscardEdits = async () => (await dialog.showMessageBox(win, DISCARD_EDITS)).response === 0;
 const RUNSHEET_MAX_BYTES = 2 * 1024 * 1024;
 const RUNSHEET_MAX_FILES = 1000;
 const RUNSHEET_MAX_DEPTH = 4;
@@ -848,20 +869,46 @@ async function listRunsheets(folder) {
 }
 
 // PowerShell scripts are often UTF-16, so go by the byte order mark before assuming UTF-8.
-function decodeText(bytes) {
-  let encoding = 'utf-8';
-  if (bytes[0] === 0xff && bytes[1] === 0xfe) encoding = 'utf-16le';
-  else if (bytes[0] === 0xfe && bytes[1] === 0xff) encoding = 'utf-16be';
-  return new TextDecoder(encoding).decode(bytes);
+function textEncoding(bytes) {
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return 'utf-16le';
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return 'utf-16be';
+  return 'utf-8';
+}
+const decodeText = (bytes) => new TextDecoder(textEncoding(bytes)).decode(bytes);
+
+// Bytes that don't decode (a Windows-1252 file, say) would be lost by saving the decoded text.
+function decodesCleanly(bytes) {
+  try {
+    new TextDecoder(textEncoding(bytes), { fatal: true }).decode(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The new text in the same encoding, byte order mark and line endings as the file it replaces.
+function encodeLike(originalBytes, text) {
+  const original = decodeText(originalBytes);
+  const crlf = original.match(/\r\n/g)?.length ?? 0;
+  const lf = (original.match(/\n/g)?.length ?? 0) - crlf;
+  const body = crlf > lf ? text.replace(/\n/g, '\r\n') : text;
+  const encoding = textEncoding(originalBytes);
+  if (encoding === 'utf-8') {
+    const hasBom = originalBytes[0] === 0xef && originalBytes[1] === 0xbb && originalBytes[2] === 0xbf;
+    return Buffer.from(`${hasBom ? '\ufeff' : ''}${body}`, 'utf8');
+  }
+  const encoded = Buffer.from(`\ufeff${body}`, 'utf16le');
+  return encoding === 'utf-16be' ? encoded.swap16() : encoded;
 }
 
 function readRunsheet(file) {
   const name = path.basename(file);
   try {
     if (fs.statSync(file).size > RUNSHEET_MAX_BYTES) return { path: file, name, error: 'it is larger than 2 MB' };
-    const text = decodeText(fs.readFileSync(file));
+    const bytes = fs.readFileSync(file);
+    const text = decodeText(bytes);
     if (text.includes('\0')) return { path: file, name, error: "it doesn't look like a text file" };
-    return { path: file, name, text, baseUrl: pathToFileURL(path.dirname(file) + path.sep).href };
+    return { path: file, name, text, editable: decodesCleanly(bytes), baseUrl: pathToFileURL(path.dirname(file) + path.sep).href };
   } catch (err) {
     return { path: file, name, error: err.code === 'ENOENT' ? 'the file no longer exists' : err.message };
   }
@@ -901,6 +948,38 @@ ipcMain.handle('runsheet:open', async (e, relative) => {
   const sheet = readRunsheet(path.join(folder, ...relative.split('/')));
   if (!sheet.error) { settings.runsheetPath = sheet.path; saveSettings(); }
   return { ...sheet, relative };
+});
+// `expected` is the text the edit started from, so a change made elsewhere since isn't overwritten
+// without asking. Returns the file as saved, an error, or null if the user chose not to overwrite.
+ipcMain.handle('runsheet:save', async (e, relative, text, expected) => {
+  const folder = settings.runsheetFolder;
+  if (!fromUi(e) || !folder || typeof text !== 'string') return null;
+  const name = String(relative);
+  let files = [];
+  try { files = await listRunsheets(folder); } catch {}
+  if (!files.includes(relative)) return { name, error: 'it is no longer in the folder' };
+  const file = path.join(folder, ...relative.split('/'));
+  try {
+    const current = await fs.promises.readFile(file);
+    if (!decodesCleanly(current)) return { name, error: "it isn't valid UTF-8 or UTF-16, so saving could damage it" };
+    if (decodeText(current).replace(/\r\n?/g, '\n') !== expected) {
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'warning', message: `${path.basename(file)} has changed on disk.`, detail: 'Saving replaces those changes with yours.',
+        buttons: ['Overwrite', 'Cancel'], defaultId: 1, cancelId: 1,
+      });
+      if (response !== 0) return null;
+    }
+    const encoded = encodeLike(current, text);
+    if (encoded.length > RUNSHEET_MAX_BYTES) return { name, error: 'it would be larger than 2 MB' };
+    await fs.promises.writeFile(file, encoded); // in place, which keeps its permissions and any links to it
+  } catch (err) {
+    return { name, error: err.code === 'ENOENT' ? 'the file no longer exists' : err.message };
+  }
+  return { ...readRunsheet(file), relative };
+});
+ipcMain.handle('runsheet:confirm-discard', async (e) => {
+  if (!fromUi(e)) return false;
+  return confirmDiscardEdits();
 });
 
 // --- Web tab: an ordinary browser for any site, so nothing it does is trusted (ADR 0005) -------

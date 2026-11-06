@@ -7,7 +7,7 @@ and a real terminal in one window, with an "airlock" scratchpad between them:
 - **Right pane:** claude.ai in an embedded browser with its own persistent session. You log in
   once.
 - **Left pane:** an interactive terminal. You choose the shell from the toolbar: PowerShell or
-  a WSL distro on Windows, the shells in `/etc/shells` on macOS and Linux.
+  a WSL distro on Windows, the shells in `/etc/shells` and `pwsh` on macOS and Linux.
 - **Airlock** (below the terminal): anything copied in the chat lands here automatically. You
   review and edit it, then send it to the terminal with **Run** / `Ctrl+Enter`.
 
@@ -52,8 +52,8 @@ the middle of the workflow without slowing it down.
 - **Themes:** Dark Modern, Light Modern, high contrast, Monokai, Oceanic Next, or following the
   system.
 - **Runsheet:** a tab beside Claude listing the files in a chosen folder. An opened file shows
-  read-only: scripts with syntax highlighting, Markdown as a formatted page. Copying from it fills
-  the airlock, as copying in the chat does.
+  scripts with syntax highlighting and Markdown as a formatted page, and Edit changes and saves
+  its plain text. Copying from the formatted view fills the airlock, as copying in the chat does.
 - **Web tab:** a small browser beside Claude, for pages such as Confluence. Copying from a page
   fills the airlock.
 - **Double-copy:** copying the same text twice quickly, from the chat, a runsheet or a Web tab site
