@@ -34,6 +34,8 @@ Builds are unsigned, so each OS warns on first launch:
 - [ADR 0001: Electron + node-pty + xterm.js](docs/adr/0001-electron-node-pty-xterm.md)
 - [ADR 0004: Terminal tabs and saved state](docs/adr/0004-tabs-and-saved-state.md)
 - [ADR 0005: Double-copy runs a command](docs/adr/0005-double-copy.md)
+- [ADR 0007: Command blocks](docs/adr/0007-command-blocks.md)
+- [ADR 0008: Remote sessions](docs/adr/0008-remote-sessions.md)
 - [Dependencies](docs/DEPENDENCIES.md)
 
 ## Licence

@@ -29,11 +29,51 @@
         <select id="aws" title="AWS profile: sets AWS_PROFILE in this terminal">
           <option value="">AWS profile…</option>
         </select>
+        <button id="copy-block" class="icon" aria-label="Copy last command">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8.5" height="9.5" rx="1.5"/><path d="M3 11V3a1.5 1.5 0 0 1 1.5-1.5H10"/></svg>
+        </button>
+        <button id="send-block" class="icon" aria-label="Send last command to Claude">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2.5 14.5 8 2 13.5 4 8Z"/><path d="M4 8h5"/></svg>
+        </button>
+        <span id="remote-chip" hidden><span class="dot"></span><span id="remote-address" class="mono"></span><span id="remote-how"></span></span>
+        <span id="remote-key" hidden title="ssh is using 1Password's SSH agent: keys stay in 1Password, and each use is approved there">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="5.5" cy="10.5" r="3"/><path d="M7.6 8.4 13 3M11 5l1.5 1.5M9.5 6.5 11 8"/></svg>Key from 1Password</span>
+        <button id="remote-disconnect" hidden>Disconnect</button>
+        <button id="remote-send" class="icon" hidden title="Send a file from this machine to the folder this tab is in" aria-label="Send a file to the server">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 11V2.5M4.5 6 8 2.5 11.5 6M2.5 10.5v3h11v-3"/></svg>
+        </button>
+        <button id="remote-get" class="icon" hidden title="Get a file from the server" aria-label="Get a file from the server">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5V11M4.5 7.5 8 11l3.5-3.5M2.5 10.5v3h11v-3"/></svg>
+        </button>
         <!-- In the toolbar row, so a change in the environment never resizes the terminal. -->
         <div id="envbar" hidden></div>
+        <div id="find">
+          <input id="find-input" type="text" placeholder="Find" spellcheck="false" aria-label="Find in terminal">
+          <span id="find-count"></span>
+          <button id="find-case" class="find-toggle" title="Match case" aria-pressed="false">Aa</button>
+          <button id="find-regex" class="find-toggle" title="Use regular expression" aria-pressed="false">.*</button>
+          <button id="find-prev" title="Previous match (Shift+Enter)" aria-label="Previous match">↑</button>
+          <button id="find-next" title="Next match (Enter)" aria-label="Next match">↓</button>
+        </div>
       </header>
       <div id="terminal-wrap">
         <div id="terminal"></div>
+        <div id="remote-bar" hidden>
+          <span id="remote-bar-text"></span>
+          <span class="spacer"></span>
+          <button id="remote-reconnect" class="primary">Reconnect</button>
+        </div>
+        <form id="remote-get-form" hidden>
+          <label for="remote-get-path" id="remote-get-label">Get a file from the server</label>
+          <input id="remote-get-path" class="mono" spellcheck="false" placeholder="Path, relative to the folder this tab is in">
+          <button type="submit" class="primary">Get</button>
+          <button type="button" id="remote-get-cancel">Cancel</button>
+        </form>
+        <div id="block-band" hidden></div>
+        <div id="block-actions" class="block-actions" hidden>
+          <button id="block-copy">Copy</button>
+          <button id="block-send">Send to Claude</button>
+        </div>
         <div id="scratchpad" hidden>
           <div id="scratch-panes">
             <div id="scratch-split" class="splitter"></div>
@@ -85,7 +125,7 @@
             <div class="row"><button id="setting-runsheet-choose">Choose…</button></div>
           </section>
           <section>
-            <h2>Snippets folder</h2>
+            <h2>Local Snippets folder</h2>
             <div class="row"><code id="snippets-dir"></code></div>
             <div class="row">
               <button id="snippets-choose">Choose…</button>
@@ -107,6 +147,17 @@
               keeps its sign-in separate. For an SSH address, give the key file instead.</p>
           </section>
           <section>
+            <h2>Remotes</h2>
+            <label class="row"><input id="setting-ssh-config-hosts" type="checkbox"> List the hosts in ~/.ssh/config</label>
+            <label class="row"><input id="setting-ssh-accept-new" type="checkbox"> Trust a server's key the first time you connect to it</label>
+            <p class="hint">Saves a new server's key to ~/.ssh/known_hosts without asking, as ssh's
+              <code>StrictHostKeyChecking=accept-new</code> does. A key that has changed since is still refused.</p>
+            <label class="row" id="setting-1password-agent-row"><input id="setting-1password-agent" type="checkbox"> Use 1Password's SSH agent for SSH tabs</label>
+            <p class="hint">Remotes saved to a repo are Markdown files in its <code>remotes</code> folder, next to
+              <code>snippets</code>. They never hold passwords or keys: a 1Password reference names a password without
+              being one, and a saved password stays on this machine.</p>
+          </section>
+          <section>
             <h2>Data folder</h2>
             <div class="row"><code id="data-dir"></code></div>
             <div class="row"><button id="data-open">Open</button></div>
@@ -119,7 +170,7 @@
       <div id="airlock">
         <aside id="library">
           <nav class="tabs">
-            <button id="tab-snippets" class="tab active">Snippets</button>
+            <button id="tab-snippets" class="tab active">Local Snippets</button>
             <button id="tab-history" class="tab">History</button>
           </nav>
           <input id="filter" type="search" placeholder="Filter" spellcheck="false">
@@ -131,6 +182,7 @@
         <div id="airlock-main">
           <header>
             <span class="section-title">Airlock</span>
+            <span id="airlock-target" hidden></span>
             <form id="snippet-form" hidden>
               <input id="snippet-name" placeholder="Snippet name" spellcheck="false" required>
               <select id="snippet-scope" aria-label="Where the snippet shows">
@@ -160,6 +212,7 @@
         <button id="tab-runsheet" class="tab" title="A folder of scripts to work through and edit">Runsheet</button>
         <button id="tab-team" class="tab" title="Snippets shared with your team through git repos">Team Snippets</button>
         <button id="tab-personal" class="tab" title="Your own snippets, kept in git repos">Personal Snippets</button>
+        <button id="tab-remotes" class="tab" title="Servers to open as terminal tabs, over SSH or PowerShell remoting">Remotes</button>
       </nav>
       <div id="right-body">
         <section id="chat"></section>
@@ -239,6 +292,91 @@
           </form>
           <ul id="team-list"></ul>
         </div>
+        <div id="remotes" hidden>
+          <header id="remotes-bar" class="pad-bar">
+            <input id="remotes-filter" type="search" placeholder="Filter remotes" spellcheck="false" aria-label="Filter remotes">
+            <span id="remotes-state"></span>
+            <span class="spacer"></span>
+            <button id="remotes-reload" title="Get the latest from every repo">Reload</button>
+            <button id="remotes-add" class="primary">Add remote</button>
+          </header>
+          <form id="remote-form" hidden autocomplete="off">
+            <h2 id="rf-title">Add a remote</h2>
+            <div class="rf-grid">
+              <label>Name<input id="rf-name" spellcheck="false" maxlength="80" required placeholder="web-01"></label>
+              <label>Computer name or address<input id="rf-address" class="mono" spellcheck="false" maxlength="253" required placeholder="web-01.corp.local"></label>
+            </div>
+            <fieldset class="rf-cards">
+              <legend>Connect with</legend>
+              <label class="rf-card"><input type="radio" name="rf-transport" value="ssh" checked>
+                <span><b>SSH</b><small>The server's own shell (bash, zsh): Linux, macOS, network gear. Uses your ~/.ssh setup and ssh-agent.</small></span></label>
+              <label class="rf-card"><input type="radio" name="rf-transport" value="winrm">
+                <span><b>PowerShell (WinRM)</b><small>Windows servers in your domain. Disconnect and pick the session up later.</small></span></label>
+              <label class="rf-card"><input type="radio" name="rf-transport" value="pwsh-ssh">
+                <span><b>PowerShell over SSH</b><small>PowerShell 7 on Linux, or Windows outside the domain.</small></span></label>
+            </fieldset>
+            <div class="rf-grid">
+              <label>User name<input id="rf-user" class="mono" spellcheck="false" maxlength="104" placeholder="Blank: your own, or the one in ~/.ssh/config"></label>
+            </div>
+            <p id="rf-ssh-keys" class="hint">Keys come from ssh-agent and ~/.ssh, as for any ssh command. The app never reads them.</p>
+            <fieldset id="rf-signin" class="rf-signin">
+              <legend>Sign in with</legend>
+              <label><input type="radio" name="rf-signin" value="windows" checked> My Windows sign-in <small>(Kerberos)</small></label>
+              <label><input type="radio" name="rf-signin" value="1password"> An account in 1Password <small>(Touch ID when connecting)</small></label>
+              <div id="rf-1password" class="rf-sub">
+                <label>Password reference<input id="rf-ref" class="mono" spellcheck="false" placeholder="op://Infra/web-servers/password"></label>
+                <div class="row">
+                  <button type="button" id="rf-op-choose">Choose from 1Password…</button>
+                  <select id="rf-op-list" hidden aria-label="1Password item"></select>
+                </div>
+                <small>Only the reference is saved, never the password. Anyone with access to that vault can use it.</small>
+              </div>
+              <label><input type="radio" name="rf-signin" value="saved"> A password saved on this machine</label>
+              <div id="rf-saved" class="rf-sub">
+                <label>Password<input id="rf-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep the saved one"></label>
+                <small>Encrypted with your system keychain's key, and never put in a repo. Teammates save their own.</small>
+              </div>
+              <label><input type="radio" name="rf-signin" value="ask"> Ask each time</label>
+            </fieldset>
+            <div class="rf-grid">
+              <label>Environment
+                <select id="rf-env">
+                  <option value="">None</option>
+                  <option value="prod">PROD: red tab, Run asks first</option>
+                  <option value="test">TEST</option>
+                  <option value="dev">DEV</option>
+                </select>
+              </label>
+              <label>Group<input id="rf-group" list="rf-groups" spellcheck="false" maxlength="60" placeholder="Web servers"></label>
+              <datalist id="rf-groups"></datalist>
+            </div>
+            <details id="rf-more">
+              <summary>More options</summary>
+              <div class="rf-grid">
+                <label>Port<input id="rf-port" class="mono" inputmode="numeric" placeholder="Default"></label>
+                <label>Start in a folder<input id="rf-start" class="mono" spellcheck="false" placeholder="/srv/app or C:\inetpub"></label>
+              </div>
+              <label class="rf-check" id="rf-https-row"><input id="rf-https" type="checkbox"> Use HTTPS</label>
+              <label class="rf-check" id="rf-keep-row"><input id="rf-keep" type="checkbox"> Keep the session on the server, with tmux</label>
+              <p id="rf-keep-note" class="hint">Inside tmux, Copy last, the hover buttons and the folder in the status bar don't work, because tmux draws the screen itself.</p>
+              <label>Notes for whoever connects<textarea id="rf-notes" rows="3" spellcheck="true"></textarea></label>
+            </details>
+            <div class="rf-save-to">
+              <label>Save to<select id="rf-source"></select></label>
+              <small id="rf-source-note"></small>
+            </div>
+            <p id="rf-problem" class="hint error"></p>
+            <div class="row rf-buttons">
+              <button type="button" id="rf-test">Test connection</button>
+              <span id="rf-test-result"></span>
+              <span class="spacer"></span>
+              <button type="button" id="rf-cancel">Cancel</button>
+              <button type="button" id="rf-save">Save</button>
+              <button type="submit" id="rf-save-connect" class="primary">Save and connect</button>
+            </div>
+          </form>
+          <ul id="remote-list"></ul>
+        </div>
       </div>
     </section>
   </main>
@@ -271,6 +409,7 @@
   <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
   <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
   <script src="../../node_modules/@xterm/addon-serialize/lib/addon-serialize.js"></script>
+  <script src="../../node_modules/@xterm/addon-search/lib/addon-search.js"></script>
   <script src="../../node_modules/@xterm/addon-unicode-graphemes/lib/addon-unicode-graphemes.js"></script>
   <script src="../../node_modules/marked/lib/marked.umd.js"></script>
   <script src="../../node_modules/dompurify/dist/purify.min.js"></script>
@@ -279,5 +418,6 @@
   <script src="themes.js"></script>
   <script src="diff.js"></script>
   <script src="renderer.js"></script>
+  <script src="remotes.js"></script>
 </body>
 </html>
