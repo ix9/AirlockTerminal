@@ -12,6 +12,8 @@ All versions are pinned exactly in `package.json`.
 | @xterm/addon-web-links | 0.12.0 | Clickable URLs in the terminal | MIT |
 | @xterm/addon-serialize | 0.14.0 | Saves terminal output between sessions (opt-in) | MIT |
 | @xterm/addon-unicode-graphemes | 0.4.0 | Unicode 15 character widths, so emoji in prompts line up with the shell | MIT |
+| @xterm/addon-ligatures | 0.10.0 | Programming ligatures (`=>`, `!=`) in fonts that have them | MIT |
+| @xterm/addon-search | 0.16.0 | Find in the terminal | MIT |
 | @highlightjs/cdn-assets | 11.11.1 | Syntax highlighting in the Runsheet | BSD-3-Clause |
 | marked | 18.1.1 | Formats Markdown runsheets | MIT |
 | dompurify | 3.4.17 | Sanitizes formatted Markdown | MPL-2.0 OR Apache-2.0 |
@@ -23,11 +25,16 @@ shells in `/etc/shells`, plus `pwsh` if it's installed, on macOS and Linux.
 `git` on the PATH, for Team snippets only ([ADR 0006](adr/0006-team-snippets.md)). It uses the
 person's own git sign-in (Git Credential Manager or SSH keys).
 
+For remote sessions ([ADR 0008](adr/0008-remote-sessions.md)), all optional and only when used:
+`ssh` and `scp` (built into macOS, Linux and Windows 10+); PowerShell, for the PowerShell
+connection types; the 1Password CLI (`op`), for passwords referenced from 1Password; and `tmux` on
+the server, to keep SSH sessions.
+
 External services: **claude.ai**, loaded in the chat pane. The main process also reads
 claude.ai's usage endpoint with the same session ([ADR 0003](adr/0003-claude-usage-stats.md)).
 Other network calls: the team snippets repo set in Settings (through `git`), the Web tab loads the addresses you enter (text that isn't an address is sent
 to Google as a search), and Markdown runsheets load any remote images they contain.
 
-Local files read: `~/.aws/config` (profile names only), the names and contents of files in the chosen Runsheet folder, and the `README.md` of the git repository the terminal is in (its code blocks become snippets). Files in the Runsheet folder are written only when you press Save while editing one. Files written in the app's user data
+Local files read: `~/.aws/config` (profile names only), `~/.ssh/config` and the files it includes (host names, users and addresses only), the names and contents of files in the chosen Runsheet folder, and the `README.md` of the git repository the terminal is in (its code blocks become snippets). Files in the Runsheet folder are written only when you press Save while editing one. Files written in the app's user data
 folder: `settings.json`, `snippets.json` (or in a folder chosen in Settings), `team-snippets/` (a clone of the team repo), and, readable only
-by the user, `history.jsonl`, `scratchpad.json` and `scrollback.json` (only if turned on).
+by the user, `history.jsonl`, `scratchpad.json`, `remotes.json`, `remote-passwords.json` (encrypted) and `scrollback.json` (only if turned on). Remote tabs connect to the servers you choose, and copy files to them when asked.

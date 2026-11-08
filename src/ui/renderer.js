@@ -41,6 +41,8 @@ let activeTab = null;
 let nextTabId = 1;
 let fontSize = prefs.fontSize ?? DEFAULT_FONT_SIZE;
 let outputChanged = false;
+// Ships only as an ES module, unlike the other addons, so it's imported rather than a <script>.
+const ligaturesAddon = import('../../node_modules/@xterm/addon-ligatures/lib/addon-ligatures.mjs');
 
 const terminalAppearance = () => ({
   theme: TERMINAL_THEMES[theme].colors,
@@ -90,6 +92,7 @@ function paneZoom(el, key, apply) {
 }
 
 function tabLabel(tab) {
+  if (tab.remote) return tab.remote.name;
   const shellName = (shellLabels.get(tab.shellId) ?? 'Terminal').split(/[\\/]/).pop();
   return tab.cwd.split(/[\\/]/).filter(Boolean).pop() || tab.cwd || shellName;
 }
@@ -98,26 +101,35 @@ function updateStatusBar() {
   if (!activeTab) return;
   $('status-cwd').textContent = activeTab.cwd;
   $('status-cwd').title = activeTab.cwd;
-  $('status-shell').textContent = shellLabels.get(activeTab.shellId) ?? '';
+  $('status-shell').textContent = activeTab.remote ? remoteDescription(activeTab.remote) : shellLabels.get(activeTab.shellId) ?? '';
   const aws = activeTab.env?.get('AWS_PROFILE');
   $('status-aws').textContent = aws ? `AWS: ${aws}` : '';
 }
 function updateTabLabel(tab) {
   if (tab === activeTab) updateStatusBar();
   tab.labelEl.textContent = tabLabel(tab);
-  tab.el.title = [tab.cwd, shellLabels.get(tab.shellId)].filter(Boolean).join('\n');
+  tab.el.title = [tab.cwd, tab.remote ? remoteDescription(tab.remote) : shellLabels.get(tab.shellId)].filter(Boolean).join('\n');
   tab.el.classList.toggle('exited', tab.exited);
+  // Remote tabs (ADR 0008) carry their environment tag: PROD gets a red strip.
+  const env = tab.remote?.env ?? '';
+  tab.el.dataset.env = env;
+  tab.envEl.textContent = env.toUpperCase();
+  tab.envEl.hidden = !env;
 }
 
-function createTab(shellId) {
+// `remote`: the remote this tab connects to (ADR 0008), or null for a shell on this machine.
+function createTab(shellId, remote = null) {
   const host = document.createElement('div');
   host.className = 'terminal-host';
   $('terminal').append(host);
 
   const term = new Terminal({
     // Nerd Fonts first so prompt themes (oh-my-posh, starship, powerlevel10k) show their icons.
-    fontFamily: '"CaskaydiaCove Nerd Font Mono", "CaskaydiaMono Nerd Font Mono", ' +
-      '"JetBrainsMono Nerd Font Mono", "MesloLGS NF", "Cascadia Mono", Menlo, Consolas, monospace',
+    // Among those, ligature fonts first: CaskaydiaCove (Cascadia Code) has them, CaskaydiaMono (Cascadia Mono)
+    // and Meslo don't. "MesloLGS NF" is powerlevel10k's build; Homebrew's is "MesloLGS Nerd Font Mono".
+    fontFamily: '"CaskaydiaCove Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "FiraCode Nerd Font Mono", ' +
+      '"CaskaydiaMono Nerd Font Mono", "MesloLGS Nerd Font Mono", "MesloLGS NF", ' +
+      '"Cascadia Code", "Cascadia Mono", Menlo, Consolas, monospace',
     fontSize,
     scrollback: SCROLLBACK_LINES,
     cursorBlink: true,
@@ -129,31 +141,41 @@ function createTab(shellId) {
   });
   const fit = new FitAddon.FitAddon();
   const serializer = new SerializeAddon.SerializeAddon();
+  const search = new SearchAddon.SearchAddon();
   // Character widths as the shells count them (Unicode 15). The default, Unicode 6, makes emoji
   // one column wide where shells use two, so a prompt with emoji in it (oh-my-posh and the like)
   // put every redraw of the line one column out, leaving ghost characters Backspace can't reach.
   term.loadAddon(new UnicodeGraphemesAddon.UnicodeGraphemesAddon());
   term.loadAddon(fit);
   term.loadAddon(serializer);
+  term.loadAddon(search);
   // Plain-text URLs.
   term.loadAddon(new WebLinksAddon.WebLinksAddon((_e, uri) => window.airlock.openExternal(uri)));
   term.open(host);
   fit.fit();
+  // Ligatures (=>, !=, ===) are drawn only if the addon joins those cells; it needs the terminal
+  // open first. It reads the font through the browser's local-fonts API, and falls back to a
+  // built-in set of common ligatures if it can't.
+  ligaturesAddon.then((m) => term.loadAddon(new m.LigaturesAddon()))
+    .catch((err) => console.warn('Ligatures unavailable:', err));
 
   const labelEl = document.createElement('span');
   labelEl.className = 'label';
+  const envEl = document.createElement('span');
+  envEl.className = 'env-badge';
+  envEl.hidden = true;
   const closeButton = document.createElement('button');
   closeButton.className = 'tab-close';
   closeButton.textContent = '×';
   closeButton.title = 'Close terminal';
   const el = document.createElement('div');
   el.className = 'tab';
-  el.append(labelEl, closeButton);
+  el.append(labelEl, envEl, closeButton);
   $('terminal-tabs').append(el);
 
   const tab = {
-    id: nextTabId++, shellId, host, term, fit, serializer, el, labelEl,
-    cwd: '', env: null, envBaseline: null, awsProfiles: [], exited: false,
+    id: nextTabId++, shellId, remote, host, term, fit, serializer, search, el, labelEl, envEl,
+    cwd: '', env: null, envBaseline: null, awsProfiles: [], exited: false, blocks: [],
   };
   tabs.push(tab);
   tabsById.set(tab.id, tab);
@@ -166,9 +188,19 @@ function createTab(shellId) {
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
     const mod = e.ctrlKey || e.metaKey;
-    // Ctrl+Shift+C copies the terminal selection (plain Ctrl+C stays as interrupt).
-    if (e.ctrlKey && e.shiftKey && e.code === 'KeyC' && term.hasSelection()) {
-      navigator.clipboard.writeText(term.getSelection());
+    const isMac = window.airlock.platform === 'darwin';
+    // Cmd+Shift on macOS, Ctrl+Shift elsewhere (plain Ctrl+C stays as interrupt).
+    const shiftKey = e.shiftKey && !e.altKey && (isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey);
+    if (shiftKey && e.code === 'KeyC') {
+      // With a selection, Ctrl+Shift+C copies it. Otherwise it copies the last command.
+      if (!isMac && term.hasSelection()) navigator.clipboard.writeText(term.getSelection());
+      else copyLastBlock(tab);
+      return false;
+    }
+    if (shiftKey && e.key === 'Enter') { sendLastBlock(tab); return false; }
+    // Cmd+F on macOS. Elsewhere Ctrl+Shift+F, since the shell uses Ctrl+F.
+    if (e.code === 'KeyF' && !e.altKey && (isMac ? e.metaKey && !e.ctrlKey && !e.shiftKey : shiftKey)) {
+      openFind();
       return false;
     }
     if (mod && !e.altKey && (e.key === '=' || e.key === '+')) { setFontSize(fontSize + 1); return false; }
@@ -176,9 +208,16 @@ function createTab(shellId) {
     if (mod && !e.altKey && e.key === '0') { setFontSize(DEFAULT_FONT_SIZE); return false; }
     return true;
   });
-  term.onData((data) => window.airlock.ptyInput(tab.id, data));
+  term.onData((data) => {
+    noteBlockInput(tab, data);
+    window.airlock.ptyInput(tab.id, data);
+  });
   term.onResize(({ cols, rows }) => window.airlock.ptyResize(tab.id, { cols, rows }));
   term.parser.registerOscHandler(7337, (data) => handleShellReport(tab, data));
+  term.parser.registerOscHandler(133, (data) => handlePromptMark(tab, data));
+  search.onDidChangeResults((results) => { if (tab === activeTab) showFindCount(results); });
+  // Output moves the blocks under the mouse.
+  term.onRender(() => { if (tab === activeTab && terminalMouse) showHoveredBlock(); });
   return tab;
 }
 
@@ -187,14 +226,17 @@ function startShell(tab, { keepOutput = false } = {}) {
   tab.envBaseline = null;
   tab.cwd = '';
   tab.exited = false;
+  clearBlocks(tab);
   if (!keepOutput) tab.term.reset();
-  window.airlock.ptyStart({ id: tab.id, cols: tab.term.cols, rows: tab.term.rows, shellId: tab.shellId });
+  tab.kept = false;
+  window.airlock.ptyStart({ id: tab.id, cols: tab.term.cols, rows: tab.term.rows, shellId: tab.shellId, remoteId: tab.remote?.id });
   updateTabLabel(tab);
   if (tab === activeTab) showTabState();
   loadAwsProfiles(tab);
 }
 
 function activateTab(tab) {
+  const previous = activeTab;
   activeTab?.host.classList.remove('active');
   activeTab?.el.classList.remove('active');
   activeTab = tab;
@@ -203,6 +245,7 @@ function activateTab(tab) {
   showTabState();
   showView('terminal');
   tab.el.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  findFollowsTab(previous);
 }
 
 // The controls above the terminal describe the active tab.
@@ -212,10 +255,12 @@ function showTabState() {
   renderEnv(activeTab);
   renderAwsPicker();
   libraryFollowsTerminal();
+  if (typeof showRemoteState === 'function') showRemoteState();
 }
 
 function newTab() {
-  const tab = createTab(activeTab?.shellId ?? defaultShellId());
+  // A new tab is a shell on this machine, even next to a remote one.
+  const tab = createTab(activeTab && !activeTab.remote ? activeTab.shellId : defaultShellId());
   activateTab(tab);
   startShell(tab);
   outputChanged = true;
@@ -249,8 +294,10 @@ window.airlock.onPtyExit((id, code) => {
   const tab = tabsById.get(id);
   if (!tab) return;
   tab.exited = true;
-  tab.term.write(`\r\n[shell exited with code ${code}]\r\n`);
+  if (!tab.remote) tab.term.write(`\r\n[shell exited with code ${code}]\r\n`);
+  else tab.term.write(`\r\n\x1b[2m[${tab.kept ? `left the session running on ${tab.remote.name}` : `disconnected from ${tab.remote.name}`}]\x1b[0m\r\n`);
   updateTabLabel(tab);
+  if (tab === activeTab && typeof showRemoteState === 'function') showRemoteState();
 });
 
 $('new-tab').addEventListener('click', newTab);
@@ -413,6 +460,7 @@ function renderEnv(tab) {
 
 function handleShellReport(tab, data) {
   const [tag, cwdB64, envB64] = data.split(';');
+  if (tag === 'cmd') { noteBlockCommand(tab, data.slice('cmd;'.length)); return true; }
   if (tag !== 'airlock') return false;
   try {
     const previousCwd = tab.cwd;
@@ -430,6 +478,352 @@ function handleShellReport(tab, data) {
   return true; // consumed: never shown in the terminal
 }
 
+// --- Command blocks: where each command and its output are (ADR 0007) -----------------------
+// The shell marks them with OSC 133: A where a prompt starts, C where a command's output starts
+// and D;<exit> when it has finished. Before C, our integration also sends the command line itself.
+// The positions are xterm.js markers, which follow their line as output scrolls and are
+// disposed (line -1) when it falls out of the scrollback.
+
+const MAX_BLOCKS = 200;
+
+function newBlock(tab) {
+  const block = { prompt: tab.term.registerMarker(0), input: null, inputX: 0, enter: null,
+    output: null, end: null, endX: 0, command: null, exitCode: null };
+  tab.blocks.push(block);
+  if (tab.blocks.length > MAX_BLOCKS) disposeBlock(tab.blocks.shift());
+  return block;
+}
+
+function disposeBlock(block) {
+  for (const key of ['prompt', 'input', 'enter', 'output', 'end']) block[key]?.dispose();
+}
+
+function clearBlocks(tab) {
+  tab.blocks.forEach(disposeBlock);
+  tab.blocks = [];
+}
+
+// The block still waiting for its command to start, if the shell is at a prompt.
+function promptBlock(tab) {
+  const block = tab.blocks.at(-1);
+  return block && !block.output && !block.end ? block : null;
+}
+
+function handlePromptMark(tab, data) {
+  const [mark, arg] = data.split(';');
+  const { term } = tab;
+  const cursorX = term.buffer.normal.cursorX;
+  if (mark === 'A') newBlock(tab);
+  else if (mark === 'B') {
+    // Sent by other integrations (iTerm2's, say, over ssh): the prompt ends and input starts here.
+    const block = promptBlock(tab);
+    if (block && !block.input) { block.input = term.registerMarker(0); block.inputX = cursorX; }
+  } else if (mark === 'C') {
+    const block = promptBlock(tab) ?? newBlock(tab);
+    block.output = term.registerMarker(0);
+  } else if (mark === 'D') {
+    const block = tab.blocks.at(-1);
+    // Only once a command has run: zsh and bash also send D after an empty Enter or Ctrl+C.
+    if (block && (block.output || block.enter) && !block.end) {
+      block.end = term.registerMarker(0);
+      block.endX = cursorX;
+      block.exitCode = Number.parseInt(arg, 10) || 0;
+    }
+  }
+  return true; // consumed: never shown in the terminal
+}
+
+function noteBlockCommand(tab, commandB64) {
+  const block = promptBlock(tab);
+  try { if (block) block.command = b64(commandB64); } catch {}
+}
+
+// Keys typed at a prompt. The first one shows where the prompt ends, and Enter where the command
+// line ends. They're used when the shell doesn't send C or its command line (macOS's bash 3.2).
+function noteBlockInput(tab, data) {
+  const block = promptBlock(tab);
+  if (!block || block.enter) return;
+  if (!block.input) {
+    block.input = tab.term.registerMarker(0);
+    block.inputX = tab.term.buffer.normal.cursorX;
+  }
+  if (data.includes('\r')) block.enter = tab.term.registerMarker(0);
+}
+
+// Text between two buffer positions, joining lines that only wrapped. `to` is exclusive.
+function bufferText(term, fromLine, fromX, toLine, toX) {
+  const buffer = term.buffer.normal;
+  const lines = [];
+  let current = '';
+  for (let y = fromLine; y <= toLine; y++) {
+    const line = buffer.getLine(y);
+    if (!line) break;
+    const start = y === fromLine ? fromX : 0;
+    const end = y === toLine ? toX : line.length;
+    if (y > fromLine && !line.isWrapped) { lines.push(current.trimEnd()); current = ''; }
+    current += line.translateToString(false, start, end);
+  }
+  lines.push(current.trimEnd());
+  return lines.join('\n');
+}
+
+// Where a block is in the buffer, if a command ran in it. A running command ends at the cursor.
+function blockRange(tab, block) {
+  const buffer = tab.term.buffer.normal;
+  const outputStart = block.output ?? block.enter;
+  if (!outputStart) return null;
+  const running = !block.end;
+  if (running && block !== tab.blocks.at(-1)) return null; // abandoned when the shell restarted
+  const endLine = running ? buffer.baseY + buffer.cursorY : block.end.line;
+  const endX = running ? buffer.cursorX : block.endX;
+  if (endLine < 0) return null; // scrolled out of the scrollback
+  // The start fell out of the scrollback: what's left of it.
+  const truncated = outputStart.line < 0;
+  const outputLine = truncated ? 0 : outputStart.line + (block.output ? 0 : 1);
+  const top = block.prompt && block.prompt.line >= 0 ? block.prompt.line : outputLine;
+  const bottom = endX === 0 && endLine > top ? endLine - 1 : endLine;
+  return { outputLine, endLine, endX, top, bottom, running, truncated };
+}
+
+// A block's command and output, or null if it was an empty Enter.
+function readBlock(tab, block) {
+  const range = blockRange(tab, block);
+  if (!range) return null;
+  const { term } = tab;
+  const { outputLine, endLine, endX, running, truncated } = range;
+  const output = outputLine > endLine || (outputLine === endLine && endX === 0) ? ''
+    : bufferText(term, outputLine, 0, endLine, endX).replace(/^\n+|\s+$/g, '');
+  let command = block.command;
+  if (command === null && block.input && block.input.line >= 0 && !truncated) {
+    command = bufferText(term, block.input.line, block.inputX, outputLine - 1, term.cols);
+  }
+  command = (command ?? '').trim();
+  if (!command && !output) return null;
+  return { command, output, exitCode: block.exitCode, running, truncated };
+}
+
+// The last command that ran, with its output: what's on screen now if it's still running.
+function lastBlock(tab) {
+  for (let i = tab.blocks.length - 1; i >= 0; i--) {
+    const read = readBlock(tab, tab.blocks[i]);
+    if (read) return read;
+  }
+  return null;
+}
+
+// The block shown on a buffer line, from its prompt to the end of its output.
+function blockAtLine(tab, line) {
+  for (let i = tab.blocks.length - 1; i >= 0; i--) {
+    const range = blockRange(tab, tab.blocks[i]);
+    if (range && line >= range.top && line <= range.bottom) return readBlock(tab, tab.blocks[i]) ? tab.blocks[i] : null;
+    if (range && range.bottom < line) return null; // earlier blocks are all higher up
+  }
+  return null;
+}
+
+const isPowerShell = (shellId) => /(^|[\\/])(pwsh|powershell)(\.exe)?$/i.test(shellId);
+
+// A Markdown code block, ready to paste into a chat.
+function formatBlock(tab, { command, output, exitCode, running, truncated }) {
+  const prompt = isPowerShell(tab.shellId) ? 'PS> ' : '$ ';
+  const body = [command && prompt + command.replace(/\n/g, '\n  '), truncated && '[earlier output no longer in the scrollback]', output]
+    .filter(Boolean).join('\n');
+  const longestRun = Math.max(0, ...(body.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(Math.max(3, longestRun + 1));
+  let text = `${fence}\n${body}\n${fence}`;
+  if (running) text += '\n(Still running.)';
+  else if (exitCode) text += `\nExit code: ${exitCode}`;
+  return text;
+}
+
+function lastBlockOrSay(tab) {
+  const read = lastBlock(tab);
+  if (!read) {
+    toast(tab.blocks.length ? 'No command found in this terminal\'s output yet.'
+      : 'No commands found. This works in zsh, bash and PowerShell started by this app.', { error: true });
+  }
+  return read;
+}
+
+const describeBlock = ({ output }) => {
+  const lines = output ? output.split('\n').length : 0;
+  return `${lines} line${lines === 1 ? '' : 's'} of output`;
+};
+
+// `which` names the command in the message: "the last command" or "the command".
+async function copyForChat(tab, read, which) {
+  try {
+    await navigator.clipboard.writeText(formatBlock(tab, read));
+    toast(`Copied ${which} and ${describeBlock(read)}:`, { code: read.command || '(command not known)' });
+  } catch (err) {
+    toast(`Couldn't copy: ${err.message}`, { error: true });
+  }
+}
+
+async function sendToClaude(tab, read, which) {
+  chooseRightTab('claude');
+  if (await window.airlock.sendToChat(formatBlock(tab, read))) {
+    toast(`Sent ${which} and ${describeBlock(read)} to Claude:`, { code: read.command || '(command not known)' });
+  } else {
+    toast('Copied, but Claude\'s message box wasn\'t found. Paste it in yourself.', { error: true });
+  }
+}
+
+function copyLastBlock(tab = activeTab) {
+  const read = lastBlockOrSay(tab);
+  if (read) copyForChat(tab, read, 'the last command');
+}
+
+function sendLastBlock(tab = activeTab) {
+  const read = lastBlockOrSay(tab);
+  if (read) sendToClaude(tab, read, 'the last command');
+}
+
+const shortcut = (mac, other) => (window.airlock.platform === 'darwin' ? mac : other);
+$('copy-block').title = `Copy the last command and its output, for pasting into a chat (${shortcut('Cmd+Shift+C', 'Ctrl+Shift+C with nothing selected')})`;
+$('send-block').title = `Put the last command and its output in Claude's message box (${shortcut('Cmd+Shift+Enter', 'Ctrl+Shift+Enter')})`;
+$('copy-block').addEventListener('click', () => copyLastBlock());
+$('send-block').addEventListener('click', () => sendLastBlock());
+
+// The command under the mouse gets a band and buttons, like a block in a Runsheet.
+let hoveredCommand = null;
+let terminalMouse = null; // where the mouse is over the terminal, or null when it isn't
+
+function showHoveredBlock() {
+  const tab = activeTab;
+  let block = null;
+  let screen = null;
+  let cellHeight = 0;
+  if (terminalMouse && tab && view === 'terminal' && tab.term.buffer.active.type === 'normal') {
+    screen = tab.term.element?.querySelector('.xterm-screen')?.getBoundingClientRect();
+    cellHeight = screen ? screen.height / tab.term.rows : 0;
+    if (cellHeight && terminalMouse.y >= screen.top && terminalMouse.y < screen.bottom) {
+      block = blockAtLine(tab, tab.term.buffer.active.viewportY + Math.floor((terminalMouse.y - screen.top) / cellHeight));
+    }
+  }
+  hoveredCommand = block && { tab, block };
+  $('block-band').hidden = !block;
+  $('block-actions').hidden = !block;
+  if (!block) return;
+  const range = blockRange(tab, block);
+  const wrap = $('terminal-wrap').getBoundingClientRect();
+  const viewportY = tab.term.buffer.active.viewportY;
+  // Clipped to the part that's on screen.
+  const top = Math.max(range.top - viewportY, 0);
+  const bottom = Math.min(range.bottom - viewportY + 1, tab.term.rows);
+  const offset = screen.top - wrap.top;
+  $('block-band').style.top = `${offset + top * cellHeight}px`;
+  $('block-band').style.height = `${(bottom - top) * cellHeight}px`;
+  $('block-actions').style.top = `${offset + top * cellHeight + 2}px`;
+}
+
+$('terminal-wrap').addEventListener('mousemove', (e) => {
+  if (e.buttons) return; // selecting text
+  terminalMouse = { y: e.clientY };
+  showHoveredBlock();
+});
+$('terminal-wrap').addEventListener('mouseleave', () => {
+  terminalMouse = null;
+  showHoveredBlock();
+});
+$('block-copy').title = 'Copy this command and its output, for pasting into a chat';
+$('block-send').title = 'Put this command and its output in Claude\'s message box';
+for (const [id, action] of [['block-copy', copyForChat], ['block-send', sendToClaude]]) {
+  $(id).addEventListener('click', () => {
+    const read = hoveredCommand && readBlock(hoveredCommand.tab, hoveredCommand.block);
+    if (read) action(hoveredCommand.tab, read, 'the command');
+  });
+}
+
+// --- Find in the terminal -------------------------------------------------------------------
+
+const findOptions = { caseSensitive: false, regex: false };
+// Matches are highlighted from typing in the box until Escape.
+let findActive = false;
+
+// Match colours must be #RRGGBB. VS Code's, flattened onto each background.
+function findDecorations() {
+  const light = theme === 'light';
+  return {
+    matchBackground: light ? '#f8cfaa' : '#5c3415',
+    matchOverviewRuler: '#d18616',
+    activeMatchBackground: light ? '#a8ac94' : '#9e6a03',
+    activeMatchBorder: '#f38518',
+    activeMatchColorOverviewRuler: '#f38518',
+  };
+}
+
+function runFind({ backwards = false, incremental = false } = {}) {
+  if (view !== 'terminal') showView('terminal', { focus: false });
+  const query = $('find-input').value;
+  const { search } = activeTab;
+  findActive = Boolean(query);
+  if (!query) {
+    search.clearDecorations();
+    $('find-count').textContent = '';
+    $('find-input').classList.remove('invalid');
+    return;
+  }
+  const options = { ...findOptions, incremental, decorations: findDecorations() };
+  try {
+    if (backwards) search.findPrevious(query, options);
+    else search.findNext(query, options);
+    $('find-input').classList.remove('invalid');
+  } catch {
+    // An unfinished regular expression.
+    $('find-input').classList.add('invalid');
+    $('find-count').textContent = '';
+  }
+}
+
+function showFindCount({ resultIndex, resultCount }) {
+  $('find-count').textContent = !findActive ? ''
+    : resultCount === 0 ? 'No results'
+      : resultIndex === -1 ? `${resultCount}+ results`
+        : `${resultIndex + 1} of ${resultCount}`;
+}
+
+function openFind() {
+  const input = $('find-input');
+  // Start from the selection, as most editors do, if it's on one line.
+  const selection = activeTab.term.getSelection();
+  if (selection && !selection.includes('\n')) input.value = selection;
+  input.select();
+  input.focus();
+  if (input.value) runFind({ incremental: true });
+}
+
+// Escape: the highlights go, the text stays for next time.
+function endFind() {
+  findActive = false;
+  activeTab?.search.clearDecorations();
+  $('find-count').textContent = '';
+  activeTab?.term.focus();
+}
+
+function findFollowsTab(previous) {
+  if (!findActive || previous === activeTab) return;
+  previous?.search.clearDecorations();
+  runFind({ incremental: true });
+}
+
+$('find-input').addEventListener('input', () => runFind({ incremental: true }));
+$('find-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); runFind({ backwards: e.shiftKey }); }
+  else if (e.key === 'Escape') { e.preventDefault(); endFind(); }
+});
+$('find-prev').addEventListener('click', () => runFind({ backwards: true }));
+$('find-next').addEventListener('click', () => runFind());
+for (const [id, option] of [['find-case', 'caseSensitive'], ['find-regex', 'regex']]) {
+  $(id).addEventListener('click', () => {
+    findOptions[option] = !findOptions[option];
+    $(id).setAttribute('aria-pressed', String(findOptions[option]));
+    runFind({ incremental: true });
+    $('find-input').focus();
+  });
+}
+$('find-input').title = `Find in this terminal's output (${shortcut('Cmd+F', 'Ctrl+Shift+F')})`;
+
 // --- Shell picker -----------------------------------------------------------------------
 
 const shellPicker = $('shell');
@@ -439,6 +833,7 @@ const defaultShellId = () => (shellLabels.has(prefs.lastShell) ? prefs.lastShell
 function sendCommand(text, { focus = true } = {}) {
   if (view !== 'terminal') showView('terminal', { focus }); // nothing runs out of sight
   activeTab.term.paste(text);
+  noteBlockInput(activeTab, '\r');
   window.airlock.ptyInput(activeTab.id, '\r');
 }
 
@@ -514,6 +909,10 @@ function receiveCopy(text, gesture, { autoRunOff = false, again = 'copy again qu
     return;
   }
   lastCopy = null; // a third copy starts over rather than running again
+  if (activeTab.remote?.env === 'prod') {
+    setStatus(`Not run: auto-run is off in PROD tabs. Press Run to run it on ${activeTab.remote.name}.`, STATUS_RAN_MS);
+    return;
+  }
   if (activeTab.exited) {
     setStatus('Not run: this terminal\'s shell has exited', STATUS_RAN_MS);
     return;
@@ -525,9 +924,13 @@ function receiveCopy(text, gesture, { autoRunOff = false, again = 'copy again qu
 
 // Run: paste into the terminal (xterm.js applies bracketed paste when the shell asks for it),
 // then press Enter. The text stays in the airlock so it can be tweaked and run again.
-function runText(raw, { focus = true } = {}) {
+async function runText(raw, { focus = true } = {}) {
   const text = raw.replace(/\s+$/, '');
   if (!text) return;
+  // A PROD remote asks first, whatever the command came from (ADR 0008).
+  const tab = activeTab;
+  if (tab.remote?.env === 'prod' && !(await window.airlock.confirmRemoteRun({ name: tab.remote.name, command: text }))) return;
+  if (activeTab !== tab) return; // switched tabs while the question was open
   sendCommand(text, { focus });
   window.airlock.addHistory(text);
   cmdHistory.push({ ts: new Date().toISOString(), command: text });
@@ -949,6 +1352,8 @@ function showRightTab(tab) {
   $('web').hidden = tab !== 'web';
   $('runsheet').hidden = tab !== 'runsheet';
   $('team').hidden = !isSnippetTab(tab);
+  $('remotes').hidden = tab !== 'remotes';
+  $('tab-remotes').classList.toggle('active', tab === 'remotes');
   $('tab-claude').classList.toggle('active', tab === 'claude');
   $('tab-web').classList.toggle('active', tab === 'web');
   $('tab-runsheet').classList.toggle('active', tab === 'runsheet');
@@ -957,6 +1362,7 @@ function showRightTab(tab) {
   syncNativeViews();
   // After this script has run, as the snippets section is defined further down.
   if (isSnippetTab(tab)) queueMicrotask(showTeamTab);
+  if (tab === 'remotes' && typeof showRemotesTab === 'function') showRemotesTab(); // remotes.js loads later, and opens it then
 }
 function chooseRightTab(tab) {
   showRightTab(tab);
@@ -970,6 +1376,7 @@ $('tab-web').addEventListener('click', () => {
 $('tab-runsheet').addEventListener('click', () => chooseRightTab('runsheet'));
 $('tab-team').addEventListener('click', () => chooseRightTab('team'));
 $('tab-personal').addEventListener('click', () => chooseRightTab('personal'));
+$('tab-remotes').addEventListener('click', () => chooseRightTab('remotes'));
 
 // --- Web tab -------------------------------------------------------------------------------
 // The page is a native view that follows #web-slot, like the chat. See ADR 0005 for what a page
@@ -1877,6 +2284,7 @@ function persistScrollback() {
   outputChanged = false;
   window.airlock.saveScrollback(tabs.map((tab) => ({
     shellId: tab.shellId,
+    ...(tab.remote && { remote: tab.remote }),
     data: tab.serializer.serialize({ scrollback: SCROLLBACK_LINES, excludeAltBuffer: true, excludeModes: true }),
   })));
 }
@@ -1893,7 +2301,12 @@ $('setting-scrollback').addEventListener('change', (e) => {
 
 const RESTORED_MARK = '\x1b[2m--- restored from the previous session ---\x1b[0m\r\n';
 
-Promise.all([window.airlock.listShells(), window.airlock.loadScrollback()]).then(([shells, savedTabs]) => {
+// After every script has run (remotes.js comes after this one), since restored tabs use them all.
+const allScriptsLoaded = new Promise((resolve) => {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', resolve, { once: true });
+  else resolve();
+});
+Promise.all([window.airlock.listShells(), window.airlock.loadScrollback(), allScriptsLoaded]).then(([shells, savedTabs]) => {
   for (const s of shells) {
     shellLabels.set(s.id, s.label);
     shellPicker.add(new Option(s.label, s.id));
@@ -1902,10 +2315,16 @@ Promise.all([window.airlock.listShells(), window.airlock.loadScrollback()]).then
     newTab();
   } else {
     for (const saved of savedTabs) {
-      const tab = createTab(shellLabels.has(saved.shellId) ? saved.shellId : defaultShellId());
+      const tab = createTab(shellLabels.has(saved.shellId) ? saved.shellId : defaultShellId(), saved.remote ?? null);
       if (!activeTab) activateTab(tab);
-      // Old output first, so the new shell's prompt lands below it.
-      tab.term.write(`${saved.data}\r\n${RESTORED_MARK}`, () => startShell(tab, { keepOutput: true }));
+      // Old output first, so the new shell's prompt lands below it. Remote tabs wait for Reconnect,
+      // so starting the app never signs in to a server by itself.
+      if (tab.remote) {
+        tab.exited = true;
+        tab.term.write(`${saved.data}\r\n${RESTORED_MARK}`, () => { updateTabLabel(tab); if (tab === activeTab) showRemoteState(); });
+      } else {
+        tab.term.write(`${saved.data}\r\n${RESTORED_MARK}`, () => startShell(tab, { keepOutput: true }));
+      }
     }
   }
   scrollbackLoaded = true;
