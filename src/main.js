@@ -8,8 +8,14 @@ const pty = require('node-pty');
 const remotes = require('./remotes');
 
 const CHAT_URL = 'https://claude.ai/';
-const TITLEBAR_HEIGHT = 35; // keep in sync with --titlebar-height in style.css
+const TITLEBAR_HEIGHT = 46; // keep in sync with --titlebar-height in style.css
 const APP_ICON = path.join(__dirname, 'assets', 'icon.png');
+
+// A copy run from source (npm start) keeps its own data folder. The one-copy-at-a-time lock
+// belongs to the data folder, so this lets it run beside an installed copy, with its own
+// settings and claude.ai sign-in. Set before anything reads the folder.
+const IS_DEV = !app.isPackaged;
+if (IS_DEV) app.setPath('userData', path.join(app.getPath('appData'), 'airlock-terminal-dev'));
 
 let win;
 let chat;
@@ -63,6 +69,7 @@ const SETTING_RULES = {
   saveScrollback: (v) => typeof v === 'boolean',
   rightTab: (v) => ['claude', 'web', 'runsheet', 'team', 'personal', 'remotes'].includes(v),
   doubleCopyRun: (v) => typeof v === 'boolean',
+  copyOnSelect: (v) => typeof v === 'boolean',
   showOtherFolderSnippets: (v) => typeof v === 'boolean',
   snippetRepos: (v) => Array.isArray(v) && v.length <= 10 && v.every(validRepo) && new Set(v.map((r) => r.id)).size === v.length,
   lastSnippetRepo: (v) => validRepoId(v),
@@ -230,7 +237,7 @@ function createWindow() {
     ...(process.platform !== 'darwin' && {
       titleBarOverlay: { color: background, symbolColor: symbols, height: TITLEBAR_HEIGHT },
     }),
-    trafficLightPosition: { x: 12, y: 10 },
+    trafficLightPosition: { x: 14, y: 16 }, // centred in the title bar
     webPreferences: {
       preload: path.join(__dirname, 'ui-preload.js'),
       contextIsolation: true,
@@ -312,6 +319,27 @@ ipcMain.handle('chat:send', async (e, text) => {
   contents.focus();
   contents.paste();
   return true;
+});
+
+// Right-click in the terminal. The menu only names the action; the UI does it, since it has the
+// selection and the terminal. The shortcuts shown are hints: the UI handles the keys itself.
+ipcMain.on('terminal:menu', (e, state) => {
+  if (!fromUi(e) || !win) return;
+  const selected = Boolean(state?.hasSelection);
+  const mac = process.platform === 'darwin';
+  const item = (label, action, accelerator, enabled = true) => ({
+    label, enabled, accelerator, registerAccelerator: false,
+    click: () => win.webContents.send('terminal:menu-action', action),
+  });
+  Menu.buildFromTemplate([
+    item('Copy', 'copy', mac ? 'Cmd+C' : 'Ctrl+Shift+C', selected),
+    item('Paste', 'paste', mac ? 'Cmd+V' : 'Ctrl+V'),
+    item('Select All', 'select-all'),
+    { type: 'separator' },
+    item('Send to Claude', 'send', mac ? 'Cmd+Shift+Enter' : 'Ctrl+Shift+Enter', selected),
+    { type: 'separator' },
+    item('Find…', 'find', mac ? 'Cmd+F' : 'Ctrl+Shift+F'),
+  ]).popup({ window: win });
 });
 
 // Links clicked in the terminal open in the system browser (web URLs only).
@@ -542,7 +570,7 @@ ipcMain.on('usage:refresh', (e) => { if (fromUi(e)) refreshUsage(true); });
 // Synchronous so the first paint already has the right theme and layout.
 ipcMain.on('settings:initial', (e) => {
   const { window: _ignored, ...rest } = settings;
-  e.returnValue = fromUi(e) ? { settings: rest, theme: resolvedTheme(), dataDir: app.getPath('userData') } : null;
+  e.returnValue = fromUi(e) ? { settings: rest, theme: resolvedTheme(), dataDir: app.getPath('userData'), dev: IS_DEV } : null;
 });
 ipcMain.on('settings:set', (e, patch) => {
   if (!fromUi(e) || !patch) return;

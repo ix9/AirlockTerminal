@@ -191,13 +191,23 @@ function createTab(shellId, remote = null) {
     const isMac = window.airlock.platform === 'darwin';
     // Cmd+Shift on macOS, Ctrl+Shift elsewhere (plain Ctrl+C stays as interrupt).
     const shiftKey = e.shiftKey && !e.altKey && (isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey);
+    // Cmd+C on macOS copies the selection, as in any Mac app. It goes to the clipboard only.
+    if (isMac && e.code === 'KeyC' && e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && term.hasSelection()) {
+      copySelection(tab);
+      return false;
+    }
     if (shiftKey && e.code === 'KeyC') {
-      // With a selection, Ctrl+Shift+C copies it. Otherwise it copies the last command.
-      if (!isMac && term.hasSelection()) navigator.clipboard.writeText(term.getSelection());
+      // Elsewhere Ctrl+Shift+C copies the selection. With nothing selected (and always on macOS,
+      // where Cmd+C does that) it copies the last command.
+      if (!isMac && term.hasSelection()) copySelection(tab);
       else copyLastBlock(tab);
       return false;
     }
-    if (shiftKey && e.key === 'Enter') { sendLastBlock(tab); return false; }
+    if (shiftKey && e.key === 'Enter') {
+      if (term.hasSelection()) sendSelection(tab);
+      else sendLastBlock(tab);
+      return false;
+    }
     // Cmd+F on macOS. Elsewhere Ctrl+Shift+F, since the shell uses Ctrl+F.
     if (e.code === 'KeyF' && !e.altKey && (isMac ? e.metaKey && !e.ctrlKey && !e.shiftKey : shiftKey)) {
       openFind();
@@ -350,33 +360,80 @@ function untilText(iso) {
   return h ? `${h}h ${m}m` : `${m}m`;
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const RING_RADIUS = 7.5;
+
+// A ring that fills clockwise from the top, drawn with a dash the length of the percentage.
+function usageRing(percent) {
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', 'ring');
+  svg.setAttribute('viewBox', '0 0 20 20');
+  svg.setAttribute('aria-hidden', 'true');
+  const circumference = 2 * Math.PI * RING_RADIUS;
+  for (const cls of ['track', 'fill']) {
+    const c = document.createElementNS(SVG_NS, 'circle');
+    c.setAttribute('class', cls);
+    c.setAttribute('cx', '10');
+    c.setAttribute('cy', '10');
+    c.setAttribute('r', String(RING_RADIUS));
+    if (cls === 'fill') c.setAttribute('stroke-dasharray', `${circumference * Math.min(Math.max(percent, 0), 100) / 100} ${circumference}`);
+    svg.append(c);
+  }
+  return svg;
+}
+
 function usageMeter(label, w) {
   const el = document.createElement('span');
   el.className = 'meter';
   if (w.percent >= 90) el.classList.add('crit');
   else if (w.percent >= 75) el.classList.add('warn');
-  const bar = document.createElement('span');
-  bar.className = 'bar';
-  const fill = document.createElement('span');
-  fill.style.width = `${Math.min(w.percent, 100)}%`;
-  bar.append(fill);
-  el.append(`${label} `, bar, ` ${Math.round(w.percent)}%`);
+  const name = document.createElement('span');
+  name.className = 'name';
+  name.textContent = `${label} `;
+  const pct = document.createElement('span');
+  pct.className = 'pct';
+  pct.textContent = `${Math.round(w.percent)}%`;
+  const top = document.createElement('span');
+  top.append(name, pct);
+  const text = document.createElement('span');
+  text.className = 'text';
+  text.append(top);
+  el.title = `${label} usage ${w.percent}%`;
   if (w.resetsAt) {
     const r = document.createElement('span');
     r.className = 'resets';
-    r.textContent = `resets ${untilText(w.resetsAt)}`;
-    el.append(r);
-    el.title = `${label} usage ${w.percent}%, resets ${new Date(w.resetsAt).toLocaleString()}`;
+    const until = untilText(w.resetsAt);
+    r.textContent = until === 'now' ? 'resets now' : /^\d/.test(until) ? `resets in ${until}` : `resets ${until}`;
+    text.append(r);
+    el.title += `, resets ${new Date(w.resetsAt).toLocaleString()}`; // still there when the line is hidden
   }
+  el.append(usageRing(w.percent), text);
   return el;
 }
 
 window.airlock.onUsage((usage) => {
   const parts = [];
   if (usage?.session) parts.push(usageMeter('Session', usage.session));
-  if (usage?.weekly) parts.push(usageMeter('Weekly', usage.weekly));
+  if (usage?.weekly) parts.push(usageMeter('Week', usage.weekly));
   $('usage').replaceChildren(...parts);
+  fitTitlebar();
 });
+
+// The reset times give way when the tabs would otherwise be squeezed. Measured with them shown,
+// in one go, so there's no flicker and no flip-flopping between the two.
+function fitTitlebar() {
+  const bar = $('titlebar');
+  const tabsEl = $('terminal-tabs');
+  bar.classList.remove('compact');
+  if (tabsEl.scrollWidth > tabsEl.clientWidth + 1) bar.classList.add('compact');
+}
+new ResizeObserver(fitTitlebar).observe($('titlebar'));
+new MutationObserver(fitTitlebar).observe($('terminal-tabs'), { childList: true, subtree: true, characterData: true });
+
+if (window.airlock.initial.dev) {
+  $('dev-badge').hidden = false;
+  document.title = 'Airlock Terminal (dev)';
+}
 window.airlock.refreshUsage();
 
 // --- Status bar ----------------------------------------------------------------------------
@@ -623,14 +680,19 @@ function blockAtLine(tab, line) {
 
 const isPowerShell = (shellId) => /(^|[\\/])(pwsh|powershell)(\.exe)?$/i.test(shellId);
 
+// A fence longer than any run of backticks inside, so the text can't close it early.
+function fenced(body) {
+  const longestRun = Math.max(0, ...(body.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(Math.max(3, longestRun + 1));
+  return `${fence}\n${body}\n${fence}`;
+}
+
 // A Markdown code block, ready to paste into a chat.
 function formatBlock(tab, { command, output, exitCode, running, truncated }) {
   const prompt = isPowerShell(tab.shellId) ? 'PS> ' : '$ ';
   const body = [command && prompt + command.replace(/\n/g, '\n  '), truncated && '[earlier output no longer in the scrollback]', output]
     .filter(Boolean).join('\n');
-  const longestRun = Math.max(0, ...(body.match(/`+/g) ?? []).map((run) => run.length));
-  const fence = '`'.repeat(Math.max(3, longestRun + 1));
-  let text = `${fence}\n${body}\n${fence}`;
+  let text = fenced(body);
   if (running) text += '\n(Still running.)';
   else if (exitCode) text += `\nExit code: ${exitCode}`;
   return text;
@@ -679,9 +741,83 @@ function sendLastBlock(tab = activeTab) {
   if (read) sendToClaude(tab, read, 'the last command');
 }
 
+// --- Highlighted text in the terminal ------------------------------------------------------
+// Copying it goes to the clipboard only, never the airlock: it's output to keep, not a command
+// to run.
+
+const describeLines = (text) => {
+  const lines = text.split('\n').length;
+  return `${lines} line${lines === 1 ? '' : 's'}`;
+};
+
+// `quiet` (copy on select) shows a status bar note instead of a toast, so it doesn't nag.
+async function copySelection(tab = activeTab, { quiet = false } = {}) {
+  const text = tab?.term.getSelection();
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    if (quiet) setStatus(`Copied ${describeLines(text)}`, 2000);
+    else toast(`Copied ${describeLines(text)} to the clipboard`);
+  } catch (err) {
+    toast(`Couldn't copy: ${err.message}`, { error: true });
+  }
+}
+
+async function sendSelection(tab = activeTab) {
+  const text = tab?.term.getSelection();
+  if (!text) return;
+  chooseRightTab('claude');
+  if (await window.airlock.sendToChat(fenced(text))) toast(`Sent ${describeLines(text)} to Claude`);
+  else toast('Copied, but Claude\'s message box wasn\'t found. Paste it in yourself.', { error: true });
+}
+
+async function pasteIntoTerminal(tab = activeTab) {
+  if (!tab) return;
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) tab.term.paste(text); // bracketed when the shell asks for it, so it doesn't run line by line
+  } catch (err) {
+    toast(`Couldn't paste: ${err.message}`, { error: true });
+  }
+  tab.term.focus();
+}
+
+const insideTerminal = (target) => Boolean(activeTab?.term.element?.contains(target));
+
+$('terminal-wrap').addEventListener('contextmenu', (e) => {
+  if (!insideTerminal(e.target)) return;
+  e.preventDefault();
+  window.airlock.terminalMenu({ hasSelection: activeTab.term.hasSelection() });
+});
+
+window.airlock.onTerminalMenu((action) => {
+  const tab = activeTab;
+  if (!tab) return;
+  if (action === 'copy') copySelection(tab);
+  else if (action === 'paste') pasteIntoTerminal(tab);
+  else if (action === 'select-all') { tab.term.selectAll(); tab.term.focus(); }
+  else if (action === 'send') sendSelection(tab);
+  else if (action === 'find') openFind();
+});
+
+// Copy on select (off by default): letting go of the mouse after highlighting copies it, as in
+// PuTTY. It watches the mouse rather than the selection, so Find's matches aren't copied.
+// A drag can end outside the terminal, so it's where it started that counts.
+let selectingInTerminal = false;
+$('terminal-wrap').addEventListener('mousedown', (e) => {
+  selectingInTerminal = e.button === 0 && insideTerminal(e.target);
+});
+document.addEventListener('mouseup', (e) => {
+  if (e.button !== 0 || !selectingInTerminal) return;
+  selectingInTerminal = false;
+  if (!prefs.copyOnSelect) return;
+  // After xterm has finished the selection (a double-click selects a word on the same mouseup).
+  setTimeout(() => { if (activeTab?.term.hasSelection()) copySelection(activeTab, { quiet: true }); }, 0);
+});
+
 const shortcut = (mac, other) => (window.airlock.platform === 'darwin' ? mac : other);
 $('copy-block').title = `Copy the last command and its output, for pasting into a chat (${shortcut('Cmd+Shift+C', 'Ctrl+Shift+C with nothing selected')})`;
-$('send-block').title = `Put the last command and its output in Claude's message box (${shortcut('Cmd+Shift+Enter', 'Ctrl+Shift+Enter')})`;
+$('send-block').title = `Put the last command and its output in Claude's message box (${shortcut('Cmd+Shift+Enter', 'Ctrl+Shift+Enter')} with nothing selected)`;
 $('copy-block').addEventListener('click', () => copyLastBlock());
 $('send-block').addEventListener('click', () => sendLastBlock());
 
@@ -2290,6 +2426,9 @@ function persistScrollback() {
 }
 setInterval(() => { if (outputChanged) persistScrollback(); }, 30000);
 window.addEventListener('beforeunload', persistScrollback);
+
+$('setting-copy-on-select').checked = prefs.copyOnSelect === true;
+$('setting-copy-on-select').addEventListener('change', (e) => saveSetting('copyOnSelect', e.target.checked));
 
 $('setting-scrollback').checked = prefs.saveScrollback === true;
 $('setting-scrollback').addEventListener('change', (e) => {

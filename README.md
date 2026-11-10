@@ -20,6 +20,10 @@ npm start
 The first `npm start` downloads Electron, because Electron's npm package fetches its binary on
 first use rather than during `npm install`.
 
+A copy run from source keeps its settings and data in its own folder (`airlock-terminal-dev`
+beside the installed app's), so it runs alongside an installed copy. It shows a DEV badge in the
+title bar and needs its own claude.ai sign-in.
+
 ## Installers
 `npm run dist` builds an installer for the current OS in `dist/`. Pushing a `v*` tag builds all
 three on GitHub Actions and attaches them to a draft release.
