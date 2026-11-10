@@ -10,19 +10,16 @@
 </head>
 <body>
   <header id="titlebar">
-    <span class="app-name">Airlock Terminal</span>
+    <img id="app-icon" src="../assets/icon.png" alt="" draggable="false">
+    <span id="app-name">Airlock Terminal</span>
+    <span id="dev-badge" hidden title="Running from source, with its own settings and data">DEV</span>
+    <nav id="terminal-tabs" aria-label="Terminals"></nav>
+    <button id="new-tab" title="New terminal (Cmd+T on macOS, Ctrl+Shift+T elsewhere)" aria-label="New terminal">+</button>
     <span class="spacer"></span>
     <span id="usage"></span>
   </header>
   <main id="app">
     <section id="left">
-      <nav id="view-tabs" class="tabs">
-        <div id="terminal-tabs"></div>
-        <button id="new-tab" class="tab" title="New terminal (Cmd+T on macOS, Ctrl+Shift+T elsewhere)">+</button>
-        <span class="spacer"></span>
-        <button id="tab-scratchpad" class="tab" title="Show or hide the scratchpad">Scratchpad</button>
-        <button id="tab-settings" class="tab" title="Show or hide settings">Settings</button>
-      </nav>
       <header id="toolbar">
         <select id="shell" title="Shell"></select>
         <button id="restart" title="Restart the shell">Restart</button>
@@ -55,6 +52,8 @@
           <button id="find-prev" title="Previous match (Shift+Enter)" aria-label="Previous match">↑</button>
           <button id="find-next" title="Next match (Enter)" aria-label="Next match">↓</button>
         </div>
+        <button id="tab-scratchpad" class="view-toggle" title="Show or hide the scratchpad">Scratchpad</button>
+        <button id="tab-settings" class="view-toggle" title="Show or hide settings">Settings</button>
       </header>
       <div id="terminal-wrap">
         <div id="terminal"></div>
@@ -106,6 +105,9 @@
             <label class="row"><input id="setting-scrollback" type="checkbox"> Save terminal tabs and their output between sessions</label>
             <p class="hint">Keeps up to 5,000 lines per tab in a file only your account can read. Anything printed
               on screen, including secrets, is written to disk. Turning this off deletes the file.</p>
+            <label class="row"><input id="setting-copy-on-select" type="checkbox"> Copy text as soon as it's highlighted</label>
+            <p class="hint">Highlighted terminal text goes straight to the clipboard, as in PuTTY. It never goes to the
+              airlock. Right-click for Copy, Paste and Send to Claude either way.</p>
           </section>
           <section>
             <h2>Double-copy</h2>

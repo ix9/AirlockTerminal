@@ -1,5 +1,5 @@
 :root {
-  --titlebar-height: 35px; /* keep in sync with TITLEBAR_HEIGHT in main.js */
+  --titlebar-height: 46px; /* keep in sync with TITLEBAR_HEIGHT in main.js */
   --radius: 6px;
   --left-width: 50%;
   --airlock-height: 240px;
@@ -197,12 +197,14 @@ body {
 
 /* --- Title bar ----------------------------------------------------------------------- */
 
+/* The app icon, then the terminal tabs (browser-style), then Claude usage. The active tab takes
+   the toolbar's colour and sits over the bar's bottom border, so it joins the toolbar below. */
 #titlebar {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  align-items: flex-end;
+  gap: 4px;
   /* Leave room for the OS window buttons (Windows/Linux right, macOS left). */
-  padding: 0 calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px) 0 12px;
+  padding: 0 calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px) 0 12px;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
   color: var(--muted);
@@ -210,19 +212,40 @@ body {
   -webkit-app-region: drag;
   user-select: none;
 }
-.mac #titlebar { padding-left: 80px; }
-#titlebar .app-name { color: var(--text); }
-#titlebar .spacer { flex: 1; }
-#titlebar button, #titlebar select { -webkit-app-region: no-drag; }
+.mac #titlebar { padding-left: 84px; }
+#titlebar > :not(#terminal-tabs) { align-self: center; }
+#titlebar .spacer { flex: 1; min-width: 24px; }
+#titlebar button, #titlebar select, #terminal-tabs .tab { -webkit-app-region: no-drag; }
+#app-icon { flex: none; width: 24px; height: 24px; margin-right: 4px; }
+#app-name { flex: none; margin-right: 12px; color: var(--text); font-size: 13px; font-weight: 600; white-space: nowrap; }
+#dev-badge {
+  flex: none; margin-right: 6px; padding: 0 6px; border-radius: 4px; line-height: 18px;
+  background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn);
+  font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+}
+#dev-badge[hidden] { display: none; }
+#new-tab {
+  flex: none; width: 32px; height: 32px; padding: 0;
+  background: none; border: none; border-radius: var(--radius);
+  color: var(--muted); font-size: 18px; line-height: 1;
+}
+#new-tab:hover { background: var(--hover); color: var(--text); }
 
-/* Claude usage meters (ADR 0003) */
-#usage { display: flex; gap: 16px; }
-.meter { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-.meter .bar { width: 60px; height: 4px; background: var(--input); border-radius: 2px; overflow: hidden; }
-.meter .bar span { display: block; height: 100%; background: var(--accent); }
-.meter.warn .bar span { background: var(--warn); }
-.meter.crit .bar span { background: var(--error); }
-.meter .resets { color: var(--dim); }
+/* Claude usage meters (ADR 0003): a ring, then the label and percentage over the reset time.
+   The reset times give way first when the tabs need the room (titlebar.compact). */
+#usage { display: flex; flex: none; gap: 18px; padding-right: 8px; }
+.meter { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.meter .ring { flex: none; width: 20px; height: 20px; transform: rotate(-90deg); }
+.meter .ring circle { fill: none; stroke-width: 3; }
+.meter .ring .track { stroke: var(--input); }
+.meter .ring .fill { stroke: var(--accent); stroke-linecap: round; }
+.meter.warn .ring .fill { stroke: var(--warn); }
+.meter.crit .ring .fill { stroke: var(--error); }
+.meter .text { display: flex; flex-direction: column; line-height: 1.2; }
+.meter .name { color: var(--text); }
+.meter .pct { color: var(--text); font-weight: 600; }
+.meter .resets { color: var(--muted); font-size: 11px; }
+#titlebar.compact .meter .resets { display: none; }
 
 /* --- Layout -------------------------------------------------------------------------- */
 
@@ -234,12 +257,11 @@ body {
 
 #left {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) 4px var(--airlock-height);
-  grid-template-areas: "tabs" "toolbar" "terminal" "hsplit" "airlock";
+  grid-template-rows: auto minmax(0, 1fr) 4px var(--airlock-height);
+  grid-template-areas: "toolbar" "terminal" "hsplit" "airlock";
   min-width: 0;
   min-height: 0;
 }
-#view-tabs { grid-area: tabs; }
 #toolbar { grid-area: toolbar; }
 #terminal-wrap { grid-area: terminal; }
 #hsplit { grid-area: hsplit; }
@@ -340,28 +362,50 @@ body {
 .env-chip b { color: var(--env-key); font-weight: normal; }
 .env-chip.removed { text-decoration: line-through; color: var(--muted); }
 
-/* --- Terminal / Scratchpad tabs ------------------------------------------------------------ */
+/* --- Terminal tabs (in the title bar) and the Scratchpad / Settings toggles ---------------- */
 
-#view-tabs { align-items: stretch; min-width: 0; background: var(--panel); }
-#view-tabs .spacer { flex: 1; min-width: 8px; }
-#view-tabs .tab { flex: none; height: 30px; padding: 0 12px; }
-#terminal-tabs { display: flex; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+/* Shrinks before anything else in the title bar, then scrolls sideways. */
+#terminal-tabs {
+  display: flex; flex: 0 1 auto; align-items: flex-end; gap: 2px; min-width: 0;
+  margin-bottom: -1px; /* over the title bar's border, so the active tab joins the toolbar */
+  overflow-x: auto; scrollbar-width: none;
+}
 #terminal-tabs .tab {
+  position: relative;
   display: flex;
-  flex-shrink: 0;
+  flex: none;
   align-items: center;
-  gap: 4px;
-  max-width: 200px;
-  padding: 0 4px 0 12px;
-  border-right: 1px solid var(--border);
+  gap: 8px;
+  max-width: 220px;
+  height: 36px;
+  padding: 0 6px 0 14px;
+  border: none;
+  border-radius: 8px 8px 0 0;
+  background: none;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 12.5px;
   font-weight: normal;
   letter-spacing: 0;
   text-transform: none;
   cursor: pointer;
   user-select: none;
 }
+#terminal-tabs .tab:hover { background: color-mix(in srgb, var(--hover) 50%, transparent); color: var(--text); }
+#terminal-tabs .tab.active, #terminal-tabs .tab.active:hover {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+/* A dot: green while the shell runs, grey once it has exited. */
+#terminal-tabs .tab::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--team-hover); }
+#terminal-tabs .tab.exited::before { background: var(--dim); }
 #terminal-tabs .label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #terminal-tabs .tab.exited .label { color: var(--dim); font-style: italic; }
+
+#toolbar .view-toggle { flex: none; background: transparent; color: var(--muted); }
+#toolbar .view-toggle:hover { background: var(--hover); color: var(--text); }
+#toolbar .view-toggle.active { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--text); }
 #terminal-tabs .tab-close {
   flex: none;
   border-radius: 4px;
@@ -467,7 +511,7 @@ body {
 
 #right { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
 #right-tabs { background: var(--panel); }
-#right-tabs .tab { flex: none; padding: 0 16px; }
+#right-tabs .tab { flex: none; height: 32px; padding: 0 16px; } /* lines up with the toolbar */
 #right-body { position: relative; min-height: 0; }
 #chat { height: 100%; }
 
@@ -590,7 +634,7 @@ body {
 .env-badge, [data-env="prod"] > .env-badge, .env-badge[data-env="prod"] { background: color-mix(in srgb, var(--error) 22%, transparent); color: var(--error); }
 [data-env="test"] > .env-badge, .env-badge[data-env="test"] { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
 [data-env="dev"] > .env-badge, .env-badge[data-env="dev"] { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
-#terminal-tabs .tab[data-env="prod"] { box-shadow: inset 0 2px 0 var(--error); }
+#terminal-tabs .tab[data-env="prod"], #terminal-tabs .tab.active[data-env="prod"] { box-shadow: inset 0 2px 0 var(--error); }
 
 /* The active remote tab, in the toolbar */
 #remote-chip { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 10px; border-radius: var(--radius); background: var(--input); font-size: 12px; white-space: nowrap; min-width: 0; overflow: hidden; }

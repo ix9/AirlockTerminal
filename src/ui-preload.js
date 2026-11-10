@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('airlock', {
   onFill: (cb) => ipcRenderer.on('airlock:fill', (_e, copy) => cb(copy)),
   copyGesture: () => ipcRenderer.sendSync('copy:gesture'),
   openExternal: (url) => ipcRenderer.send('open-external', url),
+  terminalMenu: (state) => ipcRenderer.send('terminal:menu', state),
+  onTerminalMenu: (cb) => ipcRenderer.on('terminal:menu-action', (_e, action) => cb(action)),
 
   initial: ipcRenderer.sendSync('settings:initial'),
   setSettings: (patch) => ipcRenderer.send('settings:set', patch),
