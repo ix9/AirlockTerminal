@@ -40,6 +40,8 @@ Builds are unsigned, so each OS warns on first launch:
 - [ADR 0005: Double-copy runs a command](docs/adr/0005-double-copy.md)
 - [ADR 0007: Command blocks](docs/adr/0007-command-blocks.md)
 - [ADR 0008: Remote sessions](docs/adr/0008-remote-sessions.md)
+- [ADR 0009: The Runsheet is always editable](docs/adr/0009-runsheet-editor.md)
+- [ADR 0010: Updates from GitHub Releases](docs/adr/0010-updates-from-github-releases.md)
 - [Dependencies](docs/DEPENDENCIES.md)
 
 ## Licence

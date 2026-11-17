@@ -506,6 +506,9 @@ body {
 #statusbar span:not(.spacer):empty { display: none; }
 #status-message { flex-shrink: 0; max-width: 70%; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 600; }
 #status-cwd { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#status-update { flex: none; padding: 1px 8px; border: none; border-radius: var(--radius); background: var(--focus); color: #fff; font-size: 12px; }
+#status-update[hidden] { display: none; }
+#setting-update-state { color: var(--muted); }
 
 /* --- Right pane: Claude and the Runsheet ------------------------------------------------------ */
 
@@ -605,24 +608,33 @@ body {
   cursor: pointer;
 }
 #runsheet-gutter:hover { color: var(--text); }
-#runsheet-code { position: relative; flex: 1; padding-right: 72px; }
+/* The editor is a see-through textarea over the highlighted copy of the same text, so typing,
+   undo and selection are the browser's own. Both must lay out text identically. The space to the
+   right and below means typing at the edge never scrolls the textarea itself; the pane scrolls. */
+#runsheet-text { position: relative; flex: 1; }
+#runsheet-code { padding: 0 72px var(--runsheet-line-height, 20px) 0; pointer-events: none; }
+#runsheet-code, #runsheet-editor { tab-size: 4; white-space: pre; }
 #runsheet-code code { font: inherit; }
-#runsheet-band { position: absolute; left: 0; right: 0; background: var(--band); pointer-events: none; }
-#runsheet-block-actions { position: absolute; right: 12px; z-index: 2; }
-#runsheet.editing #runsheet-view, #runsheet.editing #runsheet-page, #runsheet:not(.editing) #runsheet-editor { display: none; }
 #runsheet-editor {
-  flex: 1;
-  min-height: 0;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  padding: 8px 12px;
+  height: 100%;
+  margin: 0;
+  padding: 0;
   border: none;
   outline: none;
   resize: none;
-  overflow: auto;
-  background: var(--bg);
-  color: var(--text);
-  font: var(--runsheet-font-size, 13px)/var(--runsheet-line-height, 20px) "Cascadia Mono", Menlo, Consolas, monospace;
+  overflow: hidden;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  font: inherit;
+  letter-spacing: inherit;
 }
+#runsheet-editor::selection { background: color-mix(in srgb, var(--focus) 35%, transparent); }
+#runsheet-band { position: absolute; left: 0; right: 0; background: var(--band); pointer-events: none; }
+#runsheet-block-actions { position: absolute; right: 12px; z-index: 2; }
 
 /* --- Remotes (ADR 0008) ----------------------------------------------------------------- */
 

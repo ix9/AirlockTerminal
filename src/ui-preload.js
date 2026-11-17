@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld('airlock', {
   setSettings: (patch) => ipcRenderer.send('settings:set', patch),
   onTheme: (cb) => ipcRenderer.on('theme:changed', (_e, theme) => cb(theme)),
   openDataFolder: () => ipcRenderer.send('data:open'),
+  updateState: () => ipcRenderer.invoke('update:state'),
+  checkForUpdates: () => ipcRenderer.invoke('update:check'),
+  showUpdate: () => ipcRenderer.invoke('update:show'),
+  onUpdateState: (cb) => ipcRenderer.on('update:state', (_e, state) => cb(state)),
 
   listShells: () => ipcRenderer.invoke('shells:list'),
   ptyStart: (opts) => ipcRenderer.send('pty:start', opts),
