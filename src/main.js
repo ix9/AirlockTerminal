@@ -3,7 +3,7 @@ const path = require('node:path');
 const os = require('node:os');
 const { execFile, execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
-const { app, BrowserWindow, WebContentsView, Menu, clipboard, dialog, ipcMain, nativeTheme, safeStorage, screen, session, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, clipboard, dialog, ipcMain, nativeTheme, net, safeStorage, screen, session, shell } = require('electron');
 const pty = require('node-pty');
 const remotes = require('./remotes');
 
@@ -78,6 +78,7 @@ const SETTING_RULES = {
   showSshConfigHosts: (v) => typeof v === 'boolean',
   sshAcceptNewHostKeys: (v) => typeof v === 'boolean',
   lastRemoteSource: (v) => v === 'local' || validRepoId(v),
+  checkUpdates: (v) => typeof v === 'boolean', // ADR 0010
 };
 
 let settings = { theme: 'dark' };
@@ -95,6 +96,7 @@ function loadSettings() {
     if (typeof raw.snippetsDir === 'string') settings.snippetsDir = raw.snippetsDir;
     if (typeof raw.runsheetPath === 'string') settings.runsheetPath = raw.runsheetPath;
     if (typeof raw.runsheetFolder === 'string') settings.runsheetFolder = raw.runsheetFolder;
+    if (typeof raw.skippedUpdate === 'string') settings.skippedUpdate = raw.skippedUpdate;
     if (typeof raw.webUrl === 'string' && /^https?:\/\//i.test(raw.webUrl)) settings.webUrl = raw.webUrl;
     if (Array.isArray(raw.webAutoRunSites)) settings.webAutoRunSites = raw.webAutoRunSites.filter((s) => typeof s === 'string' && s.startsWith('https://'));
     const w = raw.window;
@@ -579,6 +581,7 @@ ipcMain.on('settings:set', (e, patch) => {
   }
   if (patch.theme) { applyThemeSource(); pushTheme(); }
   if (Object.hasOwn(patch, 'snippetRepos')) removeStaleClones();
+  if (patch.checkUpdates === true && !IS_DEV) checkForUpdates();
   if (patch.saveScrollback === false) fs.rm(dataFile('scrollback.json'), { force: true }, () => {});
   saveSettings();
 });
@@ -1746,6 +1749,135 @@ app.on('second-instance', () => {
   win.focus();
 });
 
+// --- Updates (ADR 0010) -------------------------------------------------------------------------
+// A notice when a newer release is published on GitHub. Nothing downloads or installs by itself:
+// Download opens the installer's address in the browser.
+
+const RELEASES_API = 'https://api.github.com/repos/ix9/AirlockTerminal/releases/latest';
+const RELEASES_PAGE = 'https://github.com/ix9/AirlockTerminal/releases/';
+const UPDATE_FIRST_CHECK_MS = 10 * 1000;
+const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// latest: { version, notes, pageUrl, downloadUrl, fileName } when a newer version is out.
+let updateState = { checkedAt: null, error: null, latest: null };
+
+const versionParts = (v) => v.split('-')[0].split('.').map((n) => Number.parseInt(n, 10) || 0);
+function isNewerVersion(candidate, current) {
+  const [a, b] = [versionParts(candidate), versionParts(current)];
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  }
+  return false;
+}
+
+// The installer for this OS and processor, by the artifact names in package.json. An Intel build
+// running on Apple silicon is offered the Apple silicon one.
+function installerFor(assets) {
+  const ext = { darwin: '.dmg', win32: '.exe', linux: '.AppImage' }[process.platform];
+  const arch = app.runningUnderARM64Translation ? 'arm64' : process.arch;
+  const names = { x64: ['x64', 'x86_64'], arm64: ['arm64', 'aarch64'] }[arch] ?? [arch];
+  return assets.find((a) => typeof a?.name === 'string' && typeof a.browser_download_url === 'string'
+    && a.name.endsWith(ext) && names.some((n) => a.name.includes(`-${n}.`))
+    && a.browser_download_url.startsWith(RELEASES_PAGE));
+}
+
+// What the UI shows. A version the user skipped isn't offered again until a newer one comes out.
+function publicUpdateState() {
+  const latest = updateState.latest;
+  return {
+    current: app.getVersion(),
+    checkedAt: updateState.checkedAt,
+    error: updateState.error,
+    latest: latest?.version ?? null,
+    available: latest && latest.version !== settings.skippedUpdate ? latest.version : null,
+    enabled: settings.checkUpdates !== false,
+    dev: IS_DEV,
+  };
+}
+
+let checkingForUpdates = null;
+function checkForUpdates() {
+  checkingForUpdates ??= (async () => {
+    try {
+      // Only the request itself goes to GitHub: no settings, no account, nothing about this machine.
+      const res = await net.fetch(RELEASES_API, {
+        headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'AirlockTerminal' }, cache: 'no-store',
+      });
+      if (!res.ok) throw new Error(res.status === 404 ? 'no release has been published yet' : `GitHub answered ${res.status}`);
+      const release = await res.json();
+      const version = String(release.tag_name ?? '').replace(/^v/, '');
+      if (!/^\d+(\.\d+)*(-.*)?$/.test(version)) throw new Error("the latest release's tag isn't a version number");
+      const installer = installerFor(Array.isArray(release.assets) ? release.assets : []);
+      const pageUrl = typeof release.html_url === 'string' && release.html_url.startsWith(RELEASES_PAGE) ? release.html_url : `${RELEASES_PAGE}latest`;
+      updateState = {
+        checkedAt: Date.now(),
+        error: null,
+        latest: isNewerVersion(version, app.getVersion())
+          ? { version, notes: String(release.body ?? ''), pageUrl, downloadUrl: installer?.browser_download_url ?? null, fileName: installer?.name ?? null }
+          : null,
+      };
+    } catch (err) {
+      updateState = { ...updateState, checkedAt: Date.now(), error: err.message || String(err) };
+    } finally {
+      checkingForUpdates = null;
+    }
+    toUi('update:state', publicUpdateState());
+    return publicUpdateState();
+  })();
+  return checkingForUpdates;
+}
+
+// The DEV copy only checks when asked to, from Settings.
+function scheduleUpdateChecks() {
+  if (IS_DEV) return;
+  const check = () => { if (settings.checkUpdates !== false) checkForUpdates(); };
+  setTimeout(check, UPDATE_FIRST_CHECK_MS);
+  setInterval(check, UPDATE_INTERVAL_MS);
+}
+
+// Release notes are Markdown; the dialog shows plain text, so drop the commonest marks.
+function plainNotes(markdown) {
+  const text = markdown.replace(/\r\n?/g, '\n')
+    .replace(/^#{1,6}\s*/gm, '').replace(/\*\*(.+?)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/\n{3,}/g, '\n\n').trim();
+  return text.length > 1200 ? `${text.slice(0, 1200).trimEnd()}…` : text;
+}
+
+const INSTALL_HINT = {
+  darwin: 'Open the downloaded disk image and drag Airlock Terminal to Applications, replacing this copy. As the app '
+    + "isn't signed, macOS asks you to allow it again in System Settings > Privacy & Security.",
+  win32: 'Close Airlock Terminal, then run the downloaded installer. In the SmartScreen prompt, choose More info > Run anyway.',
+  linux: 'Replace this AppImage with the downloaded one, and make it executable.',
+};
+
+ipcMain.handle('update:state', (e) => (fromUi(e) ? publicUpdateState() : null));
+// Checking by hand also brings back a version that was skipped.
+ipcMain.handle('update:check', async (e) => {
+  if (!fromUi(e)) return null;
+  if (settings.skippedUpdate) { delete settings.skippedUpdate; saveSettings(); }
+  return checkForUpdates();
+});
+ipcMain.handle('update:show', async (e) => {
+  const latest = updateState.latest;
+  if (!fromUi(e) || !latest) return null;
+  const notes = plainNotes(latest.notes);
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'info',
+    message: `Airlock Terminal ${latest.version} is available`,
+    detail: `You have ${app.getVersion()}.\n\n${notes ? `${notes}\n\n` : ''}${INSTALL_HINT[process.platform] ?? ''}`,
+    buttons: [latest.downloadUrl ? 'Download' : 'Open Release Page', 'Release Notes', 'Skip This Version', 'Later'],
+    defaultId: 0,
+    cancelId: 3,
+  });
+  if (response === 0) shell.openExternal(latest.downloadUrl ?? latest.pageUrl);
+  else if (response === 1) shell.openExternal(latest.pageUrl);
+  else if (response === 2) {
+    settings.skippedUpdate = latest.version;
+    saveSettings();
+    toUi('update:state', publicUpdateState());
+  }
+  return publicUpdateState();
+});
+
 app.whenReady().then(() => {
   // Packaged builds get their icon from the app bundle.
   if (process.platform === 'darwin' && !app.isPackaged) app.dock.setIcon(APP_ICON);
@@ -1755,6 +1887,7 @@ app.whenReady().then(() => {
   maintainHistory();
   handleDownloads();
   createWindow();
+  scheduleUpdateChecks();
 });
 app.on('window-all-closed', () => {
   for (const t of terminals.values()) t.pty.kill();

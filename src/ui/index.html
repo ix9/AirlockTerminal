@@ -160,6 +160,14 @@
               being one, and a saved password stays on this machine.</p>
           </section>
           <section>
+            <h2>Updates</h2>
+            <label class="row"><input id="setting-check-updates" type="checkbox"> Check GitHub for new versions</label>
+            <div class="row"><button id="setting-update-check">Check now</button> <span id="setting-update-state"></span></div>
+            <p class="hint">Asks GitHub's list of published releases every 6 hours, and shows a notice in the status bar
+              when there's a newer version. Nothing about you or this machine is sent, and nothing downloads or installs
+              on its own.</p>
+          </section>
+          <section>
             <h2>Data folder</h2>
             <div class="row"><code id="data-dir"></code></div>
             <div class="row"><button id="data-open">Open</button></div>
@@ -198,6 +206,7 @@
             <button id="save-team" class="team" title="Save the airlock text to a Team or Personal snippet repo">Save to Repo</button>
             <button id="paste">Paste</button>
             <button id="clear">Clear</button>
+            <button id="append-runsheet" title="Add the airlock text to the end of the file open in the Runsheet">Append to Runsheet</button>
             <button id="run-selection" title="Send only the highlighted text to the terminal (Ctrl+Shift+Enter)">Run selection</button>
             <button id="run" class="primary" title="Send to terminal (Ctrl+Enter)">Run ⏎</button>
           </header>
@@ -239,17 +248,16 @@
             <span id="runsheet-name"></span>
             <span id="runsheet-lang"></span>
             <span class="spacer"></span>
-            <button id="runsheet-reload" title="Read the file again">Reload</button>
-            <button id="runsheet-edit" title="Edit this file">Edit</button>
-            <button id="runsheet-save" title="Save this file">Save</button>
-            <button id="runsheet-cancel" title="Stop editing without saving">Cancel</button>
-            <button id="runsheet-run-selection" title="Run the highlighted text in the terminal">Run selection</button>
+            <button id="runsheet-source" title="Show the formatted page or its Markdown source">Source</button>
+            <button id="runsheet-reload" title="Read the file again from disk">Reload</button>
+            <button id="runsheet-save" title="Save this file (Ctrl+S)">Save</button>
+            <button id="runsheet-run-selection" title="Run the highlighted text, or the block at the cursor, in the terminal (Ctrl+Enter)">Run</button>
             <button id="runsheet-airlock" class="primary" title="Send the highlighted text to the airlock. Press twice quickly to run it.">To airlock</button>
           </header>
           <div id="runsheet-files">
             <div class="pad-bar">
               <button id="runsheet-folder">Choose folder…</button>
-              <input id="runsheet-filter" type="search" placeholder="Filter" spellcheck="false" aria-label="Filter files">
+              <input id="runsheet-filter" type="search" placeholder="Filter, *.ps1" spellcheck="false" aria-label="Filter files" title="Text anywhere in the path, or wildcards like *.sh. Separate several with spaces.">
               <code id="runsheet-folder-path"></code>
             </div>
             <ul id="runsheet-list"></ul>
@@ -259,7 +267,10 @@
               <div id="runsheet-content">
                 <div id="runsheet-band" hidden></div>
                 <pre id="runsheet-gutter" aria-hidden="true"></pre>
-                <pre id="runsheet-code"><code></code></pre>
+                <div id="runsheet-text">
+                  <pre id="runsheet-code" aria-hidden="true"><code></code></pre>
+                  <textarea id="runsheet-editor" wrap="off" spellcheck="false" autocomplete="off" autocapitalize="off" aria-label="File contents"></textarea>
+                </div>
               </div>
             </div>
             <div id="runsheet-block-actions" class="block-actions" hidden>
@@ -268,7 +279,6 @@
             </div>
           </div>
           <article id="runsheet-page" tabindex="-1" hidden></article>
-          <textarea id="runsheet-editor" wrap="off" spellcheck="false" aria-label="File contents"></textarea>
         </div>
         <div id="team" hidden>
           <header id="team-bar" class="pad-bar">
@@ -385,6 +395,7 @@
   <footer id="statusbar">
     <span id="status-message" role="status"></span>
     <span class="spacer"></span>
+    <button id="status-update" hidden title="See what's new and download it"></button>
     <span id="status-aws"></span>
     <span id="status-cwd"></span>
     <span id="status-shell"></span>

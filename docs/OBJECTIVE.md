@@ -51,9 +51,11 @@ the middle of the workflow without slowing it down.
   ([ADR 0004](adr/0004-tabs-and-saved-state.md)).
 - **Themes:** Dark Modern, Light Modern, high contrast, Monokai, Oceanic Next, or following the
   system.
-- **Runsheet:** a tab beside Claude listing the files in a chosen folder. An opened file shows
-  scripts with syntax highlighting and Markdown as a formatted page, and Edit changes and saves
-  its plain text. Copying from the formatted view fills the airlock, as copying in the chat does.
+- **Runsheet:** a tab beside Claude listing the files in a chosen folder. Scripts open in an
+  editor with syntax highlighting, where Ctrl+Enter runs the highlighted text or the block at the
+  cursor ([ADR 0009](adr/0009-runsheet-editor.md)). Markdown opens as a formatted page, with its
+  source a click away. Copying from either fills the airlock, as copying in the chat does, and
+  **Append to Runsheet** adds the airlock text to the end of the open file.
 - **Web tab:** a small browser beside Claude, for pages such as Confluence. Copying from a page
   fills the airlock.
 - **Double-copy:** copying the same text twice quickly, from the chat, a runsheet or a Web tab site
@@ -70,4 +72,6 @@ the middle of the workflow without slowing it down.
 - Running commands without a deliberate user action, or parsing chat content beyond copy events.
 - Plugins.
 - SSH from the shell picker. Running `ssh` by hand works, without cwd or env reporting.
-- File editing (Wave-style). Possible later, as its own ADR.
+- File editing beyond the Runsheet (Wave-style).
+- Installing updates automatically. The app says when a newer release is out and links to it
+  ([ADR 0010](adr/0010-updates-from-github-releases.md)); one-click updates are proposed there.

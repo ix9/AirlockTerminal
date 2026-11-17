@@ -681,10 +681,10 @@ function blockAtLine(tab, line) {
 const isPowerShell = (shellId) => /(^|[\\/])(pwsh|powershell)(\.exe)?$/i.test(shellId);
 
 // A fence longer than any run of backticks inside, so the text can't close it early.
-function fenced(body) {
+function fenced(body, language = '') {
   const longestRun = Math.max(0, ...(body.match(/`+/g) ?? []).map((run) => run.length));
   const fence = '`'.repeat(Math.max(3, longestRun + 1));
-  return `${fence}\n${body}\n${fence}`;
+  return `${fence}${language}\n${body}\n${fence}`;
 }
 
 // A Markdown code block, ready to paste into a chat.
@@ -1594,12 +1594,14 @@ renderWebSites(prefs.webAutoRunSites ?? []);
 showRightTab(rightTab);
 
 // --- Runsheet ------------------------------------------------------------------------------
-// A script to read, with Edit for changing it. Copying from it works like copying from the chat:
-// the text goes to the airlock and nothing runs until the user presses Run.
+// A script to work through, always editable (ADR 0009). Ctrl+Enter runs the highlighted text or
+// the block at the cursor; each block also has Copy and Run buttons. Copying from it works like
+// copying from the chat: the text goes to the airlock and nothing runs until the user presses Run.
 
 // Lines are a fixed height so the mouse position gives the line. It grows with the text size,
 // which sets --runsheet-line-height for style.css.
 let runsheetLineHeight = 20;
+let runsheetCharWidth = 0; // measured when first needed, and again after the text size changes
 const RUNSHEET_PADDING = 8;
 const RUNSHEET_EXTENSIONS = {
   sh: 'bash', bash: 'bash', zsh: 'bash', ksh: 'bash', command: 'bash',
@@ -1619,32 +1621,45 @@ function runsheetLanguage(name, text) {
   return RUNSHEET_SHEBANGS.find(([pattern]) => pattern.test(shebang))?.[1] ?? 'plaintext';
 }
 
+// The editor holds the working copy. runsheetText is the file as last read or saved, so the two
+// differ exactly when there are unsaved changes.
+const editor = $('runsheet-editor');
 let runsheetText = null;
 let runsheetRelative = '';
+let runsheetName = '';
+let runsheetLang = 'plaintext';
+let runsheetBaseUrl = '';
+let runsheetEditable = true;
 let runsheetLines = [];
 let runsheetBlocks = [];
 let runsheetFiles = [];
 let hoveredBlock = null;
+let hoveredLine = -1;
 let filesOpen = false;
-let runsheetEditing = false;
-let scrollBeforeEdit = 0;
+let showSource = false; // Markdown: its source instead of the formatted page
+let savingRunsheet = false;
 
-const hasRunsheetEdits = () => runsheetEditing && $('runsheet-editor').value !== runsheetText;
-const runsheetScroller = () => ($('runsheet-page').hidden ? $('runsheet-scroll') : $('runsheet-page'));
+const showingPage = () => runsheetText !== null && runsheetLang === 'markdown' && !showSource;
+const hasRunsheetEdits = () => runsheetText !== null && editor.value !== runsheetText;
+const runsheetScroller = () => (showingPage() ? $('runsheet-page') : $('runsheet-scroll'));
+const runsheetBlockAt = (line) => runsheetBlocks.find(([first, last]) => line >= first && line <= last) ?? null;
+const blockText = (block) => runsheetLines.slice(block[0], block[1] + 1).join('\n');
+const caretLine = () => editor.value.slice(0, editor.selectionStart).split('\n').length - 1;
 
 // The file list fills the pane until a file opens, then collapses into the bar above it.
 function syncRunsheetLayout() {
   const hasFile = runsheetText !== null;
+  const edited = hasRunsheetEdits();
   $('runsheet').classList.toggle('has-file', hasFile);
   $('runsheet-files').hidden = hasFile && !filesOpen;
-  for (const id of ['runsheet-toggle', 'runsheet-reload', 'runsheet-airlock', 'runsheet-name', 'runsheet-lang']) $(id).hidden = !hasFile;
   $('runsheet-bar').hidden = !hasFile;
-  $('runsheet').classList.toggle('editing', runsheetEditing);
-  $('runsheet-edit').hidden = !hasFile || runsheetEditing;
-  $('runsheet-reload').hidden = !hasFile || runsheetEditing;
-  $('runsheet-save').hidden = !runsheetEditing;
-  $('runsheet-cancel').hidden = !runsheetEditing;
-  $('runsheet-name').textContent = `${runsheetRelative}${hasRunsheetEdits() ? ' •' : ''}`;
+  $('runsheet-view').hidden = !hasFile || showingPage();
+  $('runsheet-page').hidden = !showingPage();
+  $('runsheet-source').hidden = runsheetLang !== 'markdown';
+  $('runsheet-source').textContent = showSource ? 'Preview' : 'Source';
+  $('runsheet-save').disabled = !edited;
+  $('runsheet-name').textContent = `${runsheetRelative}${edited ? ' •' : ''}`;
+  $('tab-runsheet').textContent = edited ? 'Runsheet •' : 'Runsheet';
   $('runsheet-toggle').textContent = filesOpen ? 'Files ▴' : 'Files ▾';
   $('runsheet-toggle').setAttribute('aria-expanded', String(filesOpen));
 }
@@ -1652,24 +1667,40 @@ function syncRunsheetLayout() {
 function closeRunsheet() {
   runsheetText = null;
   runsheetRelative = '';
-  hoveredBlock = null;
+  runsheetLang = 'plaintext';
   filesOpen = false;
-  runsheetEditing = false;
-  $('runsheet-view').hidden = true;
-  $('runsheet-page').hidden = true;
+  showSource = false;
+  editor.value = '';
+  showBlock(null);
   syncRunsheetLayout();
   renderRunsheetList();
 }
 
+// The filter takes plain text, which can appear anywhere in the path, or wildcards: * for any
+// characters and ? for one. A wildcard pattern matches the file name, or the whole path if it
+// has a /. Several patterns, separated by spaces or commas, list files matching any of them.
+function runsheetFilter(query) {
+  const terms = query.toLowerCase().split(/[\s,]+/).filter(Boolean);
+  if (!terms.length) return () => true;
+  const tests = terms.map((term) => {
+    if (!/[*?]/.test(term)) return (file) => file.includes(term);
+    const pattern = term.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+    const regex = new RegExp(`^${pattern}$`);
+    return term.includes('/') ? (file) => regex.test(file) : (file) => regex.test(file.slice(file.lastIndexOf('/') + 1));
+  });
+  return (file) => tests.some((test) => test(file.toLowerCase()));
+}
+
 function renderRunsheetList(message = '') {
-  const q = $('runsheet-filter').value.trim().toLowerCase();
+  const q = $('runsheet-filter').value.trim();
+  const matches = runsheetFilter(q);
   const note = (text) => {
     const li = document.createElement('li');
     li.className = 'message';
     li.textContent = text;
     return li;
   };
-  const items = runsheetFiles.filter((f) => f.toLowerCase().includes(q)).map((file) => {
+  const items = runsheetFiles.filter(matches).map((file) => {
     const li = document.createElement('li');
     const button = document.createElement('button');
     if (file === runsheetRelative) button.className = 'current';
@@ -1706,18 +1737,26 @@ async function loadRunsheetList() {
   }
 }
 
+// Unsaved changes are only thrown away when the user says so.
+const mayDiscardRunsheetEdits = async () => !hasRunsheetEdits() || window.airlock.confirmDiscardRunsheet();
+
 async function openRunsheetFile(relative) {
-  if (hasRunsheetEdits()) { toast('Save or cancel your changes first.', { error: true }); return; }
+  if (relative === runsheetRelative && runsheetText !== null) { // already open: just put the list away
+    filesOpen = false;
+    syncRunsheetLayout();
+    reloadRunsheet({ quiet: true });
+    return;
+  }
+  if (!(await mayDiscardRunsheetEdits())) return;
   const sheet = await window.airlock.openRunsheet(relative);
   if (!sheet) return;
   if (sheet.error) { toast(`Can't open ${sheet.name}: ${sheet.error}.`, { error: true }); return; }
   filesOpen = false;
-  runsheetEditing = false;
-  renderRunsheet(sheet);
+  showRunsheet(sheet);
 }
 
 async function chooseRunsheetFolder() {
-  if (hasRunsheetEdits()) { toast('Save or cancel your changes first.', { error: true }); return; }
+  if (!(await mayDiscardRunsheetEdits())) return;
   const chosen = await window.airlock.chooseRunsheetFolder();
   if (!chosen) return;
   prefs.runsheetFolder = chosen.folder;
@@ -1737,10 +1776,11 @@ $('runsheet-toggle').addEventListener('click', () => {
   if (filesOpen) loadRunsheetList();
 });
 
-function renderScript(text, language) {
+// The highlighted copy under the editor, the line numbers and the blocks all follow its text.
+function refreshRunsheetCode() {
+  const text = editor.value;
   runsheetLines = text.split('\n');
-  if (runsheetLines.at(-1) === '') runsheetLines.pop();
-  // Blocks are runs of lines between blank lines, each with its own Copy button.
+  // Blocks are runs of lines between blank lines, each with its own Copy and Run buttons.
   runsheetBlocks = [];
   let start = null;
   runsheetLines.forEach((line, i) => {
@@ -1748,11 +1788,12 @@ function renderScript(text, language) {
     if (!line.trim() && start !== null) { runsheetBlocks.push([start, i - 1]); start = null; }
   });
   if (start !== null) runsheetBlocks.push([start, runsheetLines.length - 1]);
-  // Highlight.js escapes the file's text, so its output is safe to insert as HTML.
-  $('runsheet-code').firstElementChild.innerHTML = hljs.highlight(runsheetLines.join('\n'), { language, ignoreIllegals: true }).value;
+  // Highlight.js escapes the text, so its output is safe to insert as HTML. A pre doesn't show a
+  // final empty line, but the textarea does, so a space holds it open.
+  const highlighted = hljs.highlight(text, { language: runsheetLang, ignoreIllegals: true }).value;
+  $('runsheet-code').firstElementChild.innerHTML = highlighted + (!text || text.endsWith('\n') ? ' ' : '');
   $('runsheet-gutter').textContent = runsheetLines.map((_line, i) => i + 1).join('\n');
-  gutterAnchor = null;
-  showBlock(null);
+  showBlock(runsheetBlockAt(hoveredLine));
 }
 
 // The sanitizer's usual list of safe addresses, plus file: and Windows paths for local images.
@@ -1791,37 +1832,60 @@ function renderMarkdown(text, baseUrl) {
   }
 }
 
-function renderRunsheet(sheet) {
+// Shows a file just opened, read again or saved. When the file says what the editor already
+// holds, the editor is left alone, so its cursor and undo history survive a save.
+function showRunsheet(sheet) {
   const text = sheet.text.replace(/\r\n?/g, '\n');
-  if (text === runsheetText && sheet.relative === runsheetRelative) { // keep scroll and selection
-    syncRunsheetLayout();
-    renderRunsheetList();
-    return;
-  }
-  const isReload = sheet.relative === runsheetRelative;
+  const sameFile = runsheetText !== null && sheet.relative === runsheetRelative;
+  const scroll = runsheetScroller().scrollTop;
   const language = runsheetLanguage(sheet.name, text);
-  const isPage = language === 'markdown';
-  const scroller = isPage ? $('runsheet-page') : $('runsheet-scroll');
-  const keepScroll = isReload ? scroller.scrollTop : 0;
   runsheetText = text;
   runsheetRelative = sheet.relative;
-  $('runsheet-view').hidden = isPage;
-  $('runsheet-page').hidden = !isPage;
-  if (isPage) renderMarkdown(text, sheet.baseUrl);
-  else renderScript(text, language);
+  runsheetName = sheet.name;
+  runsheetBaseUrl = sheet.baseUrl;
+  runsheetEditable = sheet.editable;
+  if (!savingRunsheet) editor.readOnly = !runsheetEditable;
   $('runsheet-name').title = sheet.path;
-  $('runsheet-lang').textContent = language === 'plaintext' ? 'Plain text' : hljs.getLanguage(language).name;
+  $('runsheet-lang').textContent = (language === 'plaintext' ? 'Plain text' : hljs.getLanguage(language).name)
+    + (runsheetEditable ? '' : ' · read-only');
+  $('runsheet-lang').title = runsheetEditable ? '' : "It isn't valid UTF-8 or UTF-16, so saving could damage it.";
+  if (!sameFile) {
+    showSource = false;
+    hoveredLine = -1;
+  }
+  const changed = !sameFile || language !== runsheetLang || editor.value !== text;
+  runsheetLang = language;
+  if (changed) {
+    const { selectionStart, selectionEnd } = editor;
+    if (editor.value !== text) editor.value = text;
+    if (sameFile) editor.setSelectionRange(Math.min(selectionStart, text.length), Math.min(selectionEnd, text.length));
+    else editor.setSelectionRange(0, 0);
+    refreshRunsheetCode();
+    if (showingPage()) renderMarkdown(text, runsheetBaseUrl);
+  }
   syncRunsheetLayout();
   renderRunsheetList();
-  scroller.scrollTop = keepScroll;
+  if (changed) {
+    runsheetScroller().scrollTop = sameFile ? scroll : 0;
+    if (!sameFile) $('runsheet-scroll').scrollLeft = 0;
+  }
 }
 
 async function reloadRunsheet({ quiet = false } = {}) {
-  if (runsheetEditing) return; // saving checks whether the file changed underneath the edit
+  // Background checks leave unsaved changes alone: saving asks if the file changed underneath them.
+  if (quiet && hasRunsheetEdits()) return;
+  if (!quiet && !(await mayDiscardRunsheetEdits())) return;
   const sheet = await window.airlock.readRunsheet();
   if (!sheet) return;
-  if (!sheet.error) { renderRunsheet(sheet); return; }
-  // Quiet checks run in the background: only speak up about a file that was open and has gone.
+  if (quiet && hasRunsheetEdits()) return; // typing started while the file was being read
+  if (hasRunsheetEdits()) { // the user chose to discard them
+    editor.value = runsheetText;
+    refreshRunsheetCode();
+    if (showingPage()) renderMarkdown(editor.value, runsheetBaseUrl);
+    syncRunsheetLayout();
+  }
+  if (!sheet.error) { showRunsheet(sheet); return; }
+  // Quiet checks only speak up about a file that was open and has gone.
   if (!quiet || runsheetText !== null) toast(`Can't open ${sheet.name}: ${sheet.error}.`, { error: true });
   if (runsheetText !== null) closeRunsheet();
 }
@@ -1832,79 +1896,112 @@ window.addEventListener('focus', () => {
   loadRunsheetList();
 });
 
-// Editing shows the file's plain text, ready to change. Starts from what's on disk now.
-async function startEditingRunsheet() {
-  const sheet = await window.airlock.readRunsheet();
-  if (!sheet) return;
-  if (sheet.error) { toast(`Can't open ${sheet.name}: ${sheet.error}.`, { error: true }); return; }
-  renderRunsheet(sheet);
-  if (!sheet.editable) { toast(`Can't edit ${sheet.name}: it isn't valid UTF-8 or UTF-16, so saving could damage it.`, { error: true }); return; }
-  const editor = $('runsheet-editor');
-  const isPage = !$('runsheet-page').hidden;
-  scrollBeforeEdit = runsheetScroller().scrollTop;
-  editor.value = runsheetText;
-  runsheetEditing = true;
-  syncRunsheetLayout();
-  editor.scrollTop = isPage ? 0 : scrollBeforeEdit; // scripts have the same line height in both
-  editor.setSelectionRange(0, 0);
-  editor.focus({ preventScroll: true });
-}
-
-function stopEditingRunsheet() {
-  const isPage = !$('runsheet-page').hidden;
-  const scroll = isPage ? scrollBeforeEdit : $('runsheet-editor').scrollTop;
-  runsheetEditing = false;
-  syncRunsheetLayout();
-  runsheetScroller().scrollTop = scroll;
-}
-
-let savingRunsheet = false;
 async function saveRunsheet() {
-  if (savingRunsheet) return;
-  if (!hasRunsheetEdits()) { stopEditingRunsheet(); return; }
-  const editor = $('runsheet-editor');
+  if (savingRunsheet || runsheetText === null) return;
+  if (!hasRunsheetEdits()) { setStatus(`No changes to save in ${runsheetName}`, 2000); return; }
   savingRunsheet = true;
   editor.readOnly = true; // what's saved has to be what's on screen
   try {
     const sheet = await window.airlock.saveRunsheet(runsheetRelative, editor.value, runsheetText);
     if (!sheet) return;
     if (sheet.error) { toast(`Can't save ${sheet.name}: ${sheet.error}.`, { error: true }); return; }
-    stopEditingRunsheet();
-    renderRunsheet(sheet);
+    showRunsheet(sheet);
     setStatus(`Saved ${sheet.name}`, 3000);
   } finally {
     savingRunsheet = false;
-    editor.readOnly = false;
+    editor.readOnly = !runsheetEditable;
   }
 }
-
-$('runsheet-edit').addEventListener('click', startEditingRunsheet);
 $('runsheet-save').addEventListener('click', saveRunsheet);
-$('runsheet-cancel').addEventListener('click', async () => {
-  if (!hasRunsheetEdits() || await window.airlock.confirmDiscardRunsheet()) stopEditingRunsheet();
-});
-$('runsheet-editor').addEventListener('input', syncRunsheetLayout);
-$('runsheet-editor').addEventListener('keydown', (e) => {
-  const mod = window.airlock.platform === 'darwin' ? e.metaKey : e.ctrlKey;
-  if (mod && !e.altKey && !e.shiftKey && e.code === 'KeyS') {
-    e.preventDefault();
-    e.stopPropagation();
-    saveRunsheet();
-  } else if (e.key === 'Tab' && !e.shiftKey && !mod && !e.ctrlKey && !e.altKey) {
-    e.preventDefault();
-    document.execCommand('insertText', false, '\t'); // unlike setting the value, this can be undone
-  }
+$('runsheet-source').addEventListener('click', () => {
+  showSource = !showSource;
+  if (!showSource) renderMarkdown(editor.value, runsheetBaseUrl);
+  syncRunsheetLayout();
+  if (showSource) editor.focus({ preventScroll: true });
 });
 // Main asks before the window closes with this held open (will-prevent-unload).
 window.addEventListener('beforeunload', (e) => { if (hasRunsheetEdits()) e.returnValue = false; });
 
-// The selected part of the script or page. A drag can run past it, and only the runsheet counts.
-function runsheetSelection() {
-  if (runsheetEditing) {
-    const editor = $('runsheet-editor');
-    return editor.value.slice(editor.selectionStart, editor.selectionEnd);
+// --- Runsheet editor ---
+// A see-through textarea over the highlighted text (style.css), as tall and wide as its text, so
+// the pane around it does the scrolling and keeps the cursor in view.
+
+function charWidth() {
+  if (!runsheetCharWidth) {
+    const probe = document.createElement('span');
+    probe.textContent = 'x'.repeat(100);
+    $('runsheet-code').append(probe);
+    runsheetCharWidth = probe.getBoundingClientRect().width / 100;
+    probe.remove();
   }
-  const container = $('runsheet-page').hidden ? $('runsheet-code') : $('runsheet-page');
+  return runsheetCharWidth;
+}
+
+function revealCaret() {
+  if (document.activeElement !== editor || $('runsheet-view').hidden) return;
+  const at = editor.selectionDirection === 'backward' ? editor.selectionStart : editor.selectionEnd;
+  const lineStart = editor.value.lastIndexOf('\n', at - 1) + 1;
+  let line = 0;
+  for (let i = editor.value.indexOf('\n'); i !== -1 && i < lineStart; i = editor.value.indexOf('\n', i + 1)) line++;
+  let column = 0;
+  for (const ch of editor.value.slice(lineStart, at)) column = ch === '\t' ? column + 4 - (column % 4) : column + 1;
+  const scroller = $('runsheet-scroll');
+  const top = RUNSHEET_PADDING + line * runsheetLineHeight;
+  if (top < scroller.scrollTop) scroller.scrollTop = top - RUNSHEET_PADDING;
+  else if (top + runsheetLineHeight > scroller.scrollTop + scroller.clientHeight) {
+    scroller.scrollTop = top + runsheetLineHeight + RUNSHEET_PADDING - scroller.clientHeight;
+  }
+  // The line numbers stay put over the left edge, so the text shows from just right of them.
+  const x = column * charWidth();
+  const visible = scroller.clientWidth - $('runsheet-text').offsetLeft;
+  if (x < scroller.scrollLeft) scroller.scrollLeft = Math.max(x - 4 * charWidth(), 0);
+  else if (x + 2 * charWidth() > scroller.scrollLeft + visible) scroller.scrollLeft = x + 8 * charWidth() - visible;
+}
+
+editor.addEventListener('input', () => {
+  refreshRunsheetCode();
+  syncRunsheetLayout();
+  revealCaret();
+});
+// The textarea is always big enough for its text, but the browser can still scroll it a moment
+// before the highlighted copy catches up. The two must stay lined up.
+editor.addEventListener('scroll', () => {
+  editor.scrollTop = 0;
+  editor.scrollLeft = 0;
+});
+editor.addEventListener('keydown', (e) => {
+  const mod = window.airlock.platform === 'darwin' ? e.metaKey : e.ctrlKey;
+  const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+  if (mod && !e.altKey && !e.shiftKey && e.code === 'KeyS') {
+    e.preventDefault();
+    e.stopPropagation();
+    saveRunsheet();
+  } else if ((e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) || (e.key === 'F8' && plain && !e.shiftKey)) {
+    // Ctrl+Enter, as in the airlock. F8, as in the PowerShell ISE and VS Code.
+    e.preventDefault();
+    e.stopPropagation();
+    runFromRunsheet();
+  } else if (e.key === 'Tab' && plain && !e.shiftKey) {
+    e.preventDefault();
+    document.execCommand('insertText', false, '\t'); // unlike setting the value, this can be undone
+  } else if (e.key === 'Enter' && plain && !e.shiftKey && !e.isComposing) {
+    // A new line starts with the same indentation as the one before.
+    const start = editor.selectionStart;
+    const lineStart = editor.value.lastIndexOf('\n', start - 1) + 1;
+    const indent = editor.value.slice(lineStart, start).match(/^[ \t]*/)[0];
+    if (indent) {
+      e.preventDefault();
+      document.execCommand('insertText', false, `\n${indent}`);
+    }
+  } else {
+    requestAnimationFrame(revealCaret); // arrow keys, Page Down and the like move the cursor
+  }
+});
+
+// The selected part of the script or page. A drag can run past the page, and only the page counts.
+function runsheetSelection() {
+  if (!showingPage()) return editor.value.slice(editor.selectionStart, editor.selectionEnd);
+  const container = $('runsheet-page');
   const selection = window.getSelection();
   if (!selection.rangeCount) return '';
   if (container.contains(selection.anchorNode) && container.contains(selection.focusNode)) return selection.toString();
@@ -1918,6 +2015,22 @@ function runsheetSelection() {
   return selected.toString();
 }
 
+
+// What Run and To airlock act on: the highlighted text, or else the block the cursor is in.
+function runsheetTarget() {
+  const selected = runsheetSelection();
+  if (selected.trim()) return selected;
+  if (showingPage()) return '';
+  const block = runsheetBlockAt(caretLine());
+  return block ? blockText(block) : '';
+}
+
+function runFromRunsheet() {
+  const text = runsheetTarget();
+  if (text) runText(text);
+  else toast('Highlight the text to run, or put the cursor in a block.', { error: true });
+}
+
 // A block's Copy button copies to the clipboard and the airlock. It never runs anything: that's
 // what the Run button beside it is for.
 function copyBlock(text, button) {
@@ -1928,26 +2041,25 @@ function copyBlock(text, button) {
   setTimeout(() => { button.textContent = 'Copy'; }, DOUBLE_COPY_MS);
 }
 
-// Copying from a runsheet works like copying in the chat, including double-copy.
-for (const id of ['runsheet-code', 'runsheet-page']) {
-  $(id).addEventListener('copy', () => {
+// Copying from a runsheet works like copying in the chat, including double-copy. Cutting is
+// editing, so it doesn't.
+for (const el of [editor, $('runsheet-page')]) {
+  el.addEventListener('copy', () => {
     const selected = runsheetSelection();
     if (selected.trim()) receiveCopy(selected, window.airlock.copyGesture());
   });
 }
-// Pressing these buttons mustn't clear the selection they're about to send.
-for (const id of ['runsheet-airlock', 'runsheet-run-selection']) $(id).addEventListener('mousedown', (e) => e.preventDefault());
+// Pressing these buttons mustn't take the focus, or the selection, from the editor.
+for (const id of ['runsheet-airlock', 'runsheet-run-selection', 'runsheet-save', 'runsheet-copy', 'runsheet-run']) {
+  $(id).addEventListener('mousedown', (e) => e.preventDefault());
+}
 // To airlock counts as a copy: pressed twice quickly on the same text, it runs (ADR 0005).
 $('runsheet-airlock').addEventListener('click', () => {
-  const selected = runsheetSelection();
-  if (selected.trim()) receiveCopy(selected, window.airlock.copyGesture(), { again: 'press again quickly to auto-run' });
-  else toast('Highlight the text to send first.', { error: true });
+  const text = runsheetTarget();
+  if (text) receiveCopy(text, window.airlock.copyGesture(), { again: 'press again quickly to auto-run' });
+  else toast('Highlight the text to send, or put the cursor in a block.', { error: true });
 });
-$('runsheet-run-selection').addEventListener('click', () => {
-  const selected = runsheetSelection();
-  if (selected.trim()) runText(selected);
-  else toast('Highlight the text to run first.', { error: true });
-});
+$('runsheet-run-selection').addEventListener('click', runFromRunsheet);
 
 // Clicking a line number selects that whole line. Shift+click, or dragging down the numbers,
 // selects every line in between.
@@ -1959,28 +2071,12 @@ function lineAt(clientY) {
 function selectRunsheetLines(a, b) {
   const [first, last] = a <= b ? [a, b] : [b, a];
   const lineStart = (i) => runsheetLines.slice(0, i).reduce((n, line) => n + line.length + 1, 0);
-  const start = lineStart(first);
-  const end = lineStart(last) + runsheetLines[last].length;
-  // Highlighting splits the text across many nodes; find the ones holding each end.
-  const code = $('runsheet-code').firstElementChild;
-  const range = document.createRange();
-  range.selectNodeContents(code);
-  const walker = document.createTreeWalker(code, NodeFilter.SHOW_TEXT);
-  let offset = 0;
-  let startFound = false;
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    if (!startFound && start <= offset + node.length) { range.setStart(node, start - offset); startFound = true; }
-    if (end <= offset + node.length) { range.setEnd(node, end - offset); break; }
-    offset += node.length;
-  }
-  const selection = window.getSelection();
-  selection.removeAllRanges();
-  selection.addRange(range);
+  editor.setSelectionRange(lineStart(first), lineStart(last) + runsheetLines[last].length);
 }
 $('runsheet-gutter').addEventListener('mousedown', (e) => {
   if (e.button !== 0 || !runsheetLines.length) return;
   e.preventDefault();
-  $('runsheet-view').focus({ preventScroll: true }); // so Ctrl+C copies the selection
+  editor.focus({ preventScroll: true });
   const line = lineAt(e.clientY);
   if (!e.shiftKey || gutterAnchor === null) gutterAnchor = line;
   selectRunsheetLines(gutterAnchor, line);
@@ -2000,7 +2096,7 @@ $('runsheet-page').addEventListener('click', (e) => {
   if (/^https?:\/\//i.test(link.href)) window.airlock.openExternal(link.href);
 });
 
-// In scripts, the block under the mouse gets a band and a Copy button, like a code block in the chat.
+// The block under the mouse gets a band and Copy and Run buttons, like a code block in the chat.
 function showBlock(block) {
   hoveredBlock = block;
   $('runsheet-band').hidden = !block;
@@ -2016,19 +2112,67 @@ function showBlock(block) {
 $('runsheet-scroll').addEventListener('mousemove', (e) => {
   if (e.buttons) return; // selecting text
   const y = e.clientY - $('runsheet-content').getBoundingClientRect().top - RUNSHEET_PADDING;
-  const line = Math.floor(y / runsheetLineHeight);
-  const block = runsheetBlocks.find(([first, last]) => line >= first && line <= last) ?? null;
-  if (block !== hoveredBlock) showBlock(block);
+  hoveredLine = Math.floor(y / runsheetLineHeight);
+  const block = runsheetBlockAt(hoveredLine);
+  if (block?.join() !== hoveredBlock?.join()) showBlock(block);
 });
 $('runsheet-scroll').addEventListener('scroll', () => { if (hoveredBlock) showBlock(hoveredBlock); });
-$('runsheet-view').addEventListener('mouseleave', () => showBlock(null));
-const hoveredText = () => runsheetLines.slice(hoveredBlock[0], hoveredBlock[1] + 1).join('\n');
-$('runsheet-copy').addEventListener('click', () => { if (hoveredBlock) copyBlock(hoveredText(), $('runsheet-copy')); });
-$('runsheet-run').addEventListener('click', () => { if (hoveredBlock) runText(hoveredText()); });
+$('runsheet-view').addEventListener('mouseleave', () => {
+  hoveredLine = -1;
+  showBlock(null);
+});
+$('runsheet-copy').addEventListener('click', () => { if (hoveredBlock) copyBlock(blockText(hoveredBlock), $('runsheet-copy')); });
+$('runsheet-run').addEventListener('click', () => { if (hoveredBlock) runText(blockText(hoveredBlock)); });
+
+// --- Append to Runsheet ---
+// The airlock text goes on the end of the open file as a block of its own, and waits there
+// unsaved like any other edit. In a Markdown file it goes in a code block, so it gets Run buttons.
+
+function terminalLanguage() {
+  if (activeTab?.remote) return activeTab.remote.transport === 'ssh' ? 'bash' : 'powershell';
+  return activeTab && isPowerShell(activeTab.shellId) ? 'powershell' : 'bash';
+}
+
+function appendToRunsheet() {
+  const text = airlockText.value.replace(/\s+$/, '');
+  if (!text.trim()) { toast('The airlock is empty.', { error: true }); return; }
+  if (runsheetText === null) {
+    chooseRightTab('runsheet');
+    toast('Open a file in the Runsheet first.', { error: true });
+    return;
+  }
+  if (!runsheetEditable || savingRunsheet) {
+    toast(`Can't add to ${runsheetName}${savingRunsheet ? ' while it saves' : ": it isn't valid UTF-8 or UTF-16"}.`, { error: true });
+    return;
+  }
+  const block = runsheetLang === 'markdown' ? fenced(text, terminalLanguage()) : text;
+  const end = editor.value.length;
+  const gap = !end || editor.value.endsWith('\n\n') ? '' : editor.value.endsWith('\n') ? '\n' : '\n\n';
+  const addition = `${gap}${block}\n`;
+  // Typed in, where the editor is showing, so Undo there takes it out again.
+  const previous = document.activeElement;
+  if (!$('runsheet').hidden && !$('runsheet-view').hidden) editor.focus({ preventScroll: true });
+  if (document.activeElement === editor) {
+    editor.setSelectionRange(end, end);
+    document.execCommand('insertText', false, addition);
+    previous?.focus({ preventScroll: true });
+  } else {
+    editor.setRangeText(addition, end, end, 'end');
+    refreshRunsheetCode();
+  }
+  if (showingPage()) renderMarkdown(editor.value, runsheetBaseUrl);
+  syncRunsheetLayout();
+  runsheetScroller().scrollTop = runsheetScroller().scrollHeight;
+  const saveKey = window.airlock.platform === 'darwin' ? '⌘S' : 'Ctrl+S';
+  setStatus(`Appended to ${runsheetName}, not saved yet (${saveKey} in the Runsheet)`, STATUS_RAN_MS);
+}
+$('append-runsheet').addEventListener('mousedown', (e) => e.preventDefault()); // keep the airlock's focus
+$('append-runsheet').addEventListener('click', appendToRunsheet);
 
 // Text size: the script's lines and line numbers, or the whole formatted page.
 paneZoom($('runsheet'), 'runsheetFontSize', (size) => {
   runsheetLineHeight = Math.round((size * 20) / DEFAULT_FONT_SIZE);
+  runsheetCharWidth = 0;
   root.setProperty('--runsheet-font-size', `${size}px`);
   root.setProperty('--runsheet-line-height', `${runsheetLineHeight}px`);
   root.setProperty('--runsheet-zoom', String(size / DEFAULT_FONT_SIZE));
@@ -2389,6 +2533,36 @@ window.airlock.onTheme(applyTheme);
 
 $('setting-double-copy').checked = prefs.doubleCopyRun !== false;
 $('setting-double-copy').addEventListener('change', (e) => saveSetting('doubleCopyRun', e.target.checked));
+// Updates (ADR 0010): a notice when GitHub has a newer release. Main does the checking.
+function describeUpdateCheck(state) {
+  if (!state.checkedAt) return state.dev ? 'The DEV copy only checks when you press Check now.' : `You have ${state.current}.`;
+  const when = new Date(state.checkedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  if (state.error) return `Couldn't check at ${when}: ${state.error}.`;
+  if (state.latest && !state.available) return `${state.latest} is out; you skipped it. You have ${state.current}.`;
+  return state.latest ? `${state.latest} is available. You have ${state.current}.` : `Up to date (${state.current}), checked ${when}.`;
+}
+function showUpdateState(state) {
+  if (!state) return;
+  $('status-update').hidden = !state.available;
+  $('status-update').textContent = state.available ? `Update ${state.available} available` : '';
+  $('setting-update-state').textContent = describeUpdateCheck(state);
+}
+window.airlock.updateState().then(showUpdateState);
+window.airlock.onUpdateState(showUpdateState);
+$('status-update').addEventListener('click', () => window.airlock.showUpdate().then(showUpdateState));
+$('setting-check-updates').checked = prefs.checkUpdates !== false;
+$('setting-check-updates').addEventListener('change', (e) => saveSetting('checkUpdates', e.target.checked));
+$('setting-update-check').addEventListener('click', async () => {
+  $('setting-update-check').disabled = true;
+  $('setting-update-state').textContent = 'Checking…';
+  try {
+    const state = await window.airlock.checkForUpdates();
+    showUpdateState(state);
+    if (state?.available) window.airlock.showUpdate().then(showUpdateState);
+  } finally {
+    $('setting-update-check').disabled = false;
+  }
+});
 $('setting-theme').value = prefs.theme ?? 'dark';
 $('setting-theme').addEventListener('change', (e) => saveSetting('theme', e.target.value));
 
