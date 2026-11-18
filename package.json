@@ -1,6 +1,6 @@
 {
   "name": "airlock-terminal",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Chat-to-terminal airlock: a web chat and a real terminal in one window, with a scratchpad between them.",
   "main": "src/main.js",
   "license": "MIT",
@@ -34,7 +34,7 @@
     "artifactName": "AirlockTerminal-${version}-${os}-${arch}.${ext}",
     "files": [
       "src/**/*",
-      "!src/assets/icon.svg",
+      "!src/assets/*.svg",
       "package.json"
     ],
     "asarUnpack": [
@@ -44,22 +44,27 @@
     "npmRebuild": false,
     "publish": {
       "provider": "github",
-      "releaseType": "draft"
+      "releaseType": "draft",
+      "publishAutoUpdate": false
     },
     "mac": {
       "target": [
         {
           "target": "dmg",
           "arch": [
-            "arm64",
-            "x64"
+            "arm64"
           ]
         }
       ],
       "category": "public.app-category.developer-tools",
-      "identity": "-",
-      "hardenedRuntime": false,
-      "icon": "src/assets/icon.png"
+      "hardenedRuntime": true,
+      "icon": "build/icon.icns",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true
+    },
+    "dmg": {
+      "writeUpdateInfo": false
     },
     "win": {
       "target": [
@@ -71,11 +76,12 @@
         }
       ],
       "signExecutable": false,
-      "icon": "src/assets/icon.png"
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "differentialPackage": false
     },
     "linux": {
       "target": [
@@ -87,7 +93,7 @@
         }
       ],
       "category": "Development",
-      "icon": "src/assets/icon.png"
+      "icon": "build/icons"
     }
   }
 }

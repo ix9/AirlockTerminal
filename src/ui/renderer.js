@@ -1,6 +1,24 @@
 const $ = (id) => document.getElementById(id);
 const root = document.documentElement.style;
-if (window.airlock.platform === 'darwin') document.documentElement.classList.add('mac');
+const IS_MAC = window.airlock.platform === 'darwin';
+if (IS_MAC) document.documentElement.classList.add('mac');
+
+// Shortcut hints on buttons (data-keys="mod+shift+enter"), spelled the way this platform does:
+// ⇧⌘↵ on macOS, Ctrl+Shift+Enter elsewhere.
+const KEY_NAMES = IS_MAC ? { mod: '⌘', shift: '⇧', enter: '↵' } : { mod: 'Ctrl', shift: 'Shift', enter: 'Enter' };
+const KEY_ORDER = IS_MAC ? { shift: 0, mod: 1 } : { mod: 0, shift: 1 };
+function keyHint(keys) {
+  const parts = keys.split('+').sort((a, b) => (KEY_ORDER[a] ?? 2) - (KEY_ORDER[b] ?? 2));
+  return parts.map((k) => KEY_NAMES[k] ?? k.toUpperCase()).join(IS_MAC ? '' : '+');
+}
+for (const button of document.querySelectorAll('[data-keys]')) {
+  const kbd = document.createElement('kbd');
+  kbd.textContent = keyHint(button.dataset.keys);
+  button.append(kbd);
+  button.title = `${button.title} (${kbd.textContent})`;
+}
+document.getElementById('airlock-text').placeholder = `Copy a command in the chat and it lands here. ${keyHint('mod+enter')} runs it.`;
+document.getElementById('find-input').placeholder = `Find (${IS_MAC ? '⌘F' : 'Ctrl+Shift+F'})`;
 
 // --- Settings -----------------------------------------------------------------------------
 
@@ -771,6 +789,33 @@ async function sendSelection(tab = activeTab) {
   else toast('Copied, but Claude\'s message box wasn\'t found. Paste it in yourself.', { error: true });
 }
 
+// Send to Scratchpad: the text goes on the end of the scratchpad, after a blank line, as plain
+// text rather than the Markdown a chat gets. The terminal stays in view.
+function appendToScratchpad(text) {
+  const pad = scratchpad.classList.contains('split') ? activePad : padA; // padB only shows when split
+  const { textarea } = pad;
+  const end = textarea.value.length;
+  const gap = !end || textarea.value.endsWith('\n\n') ? '' : textarea.value.endsWith('\n') ? '\n' : '\n\n';
+  textarea.setRangeText(`${gap}${text.replace(/\s+$/, '')}\n`, end, end, 'end');
+  textarea.scrollTop = textarea.scrollHeight;
+  textarea.dispatchEvent(new Event('input', { bubbles: true })); // saved, as typing would be
+}
+
+function sendBlockToScratchpad(tab, { command, output, exitCode, running, truncated }, which) {
+  const prompt = isPowerShell(tab.shellId) ? 'PS> ' : '$ ';
+  const text = [command && prompt + command.replace(/\n/g, '\n  '), truncated && '[earlier output no longer in the scrollback]', output,
+    running ? '(Still running.)' : exitCode ? `Exit code: ${exitCode}` : ''].filter(Boolean).join('\n');
+  appendToScratchpad(text);
+  toast(`Added ${which} and ${describeBlock({ output })} to the Scratchpad:`, { code: command || '(command not known)' });
+}
+
+function sendSelectionToScratchpad(tab = activeTab) {
+  const text = tab?.term.getSelection();
+  if (!text) return;
+  appendToScratchpad(text);
+  toast(`Added ${describeLines(text)} to the Scratchpad`);
+}
+
 async function pasteIntoTerminal(tab = activeTab) {
   if (!tab) return;
   try {
@@ -797,6 +842,7 @@ window.airlock.onTerminalMenu((action) => {
   else if (action === 'paste') pasteIntoTerminal(tab);
   else if (action === 'select-all') { tab.term.selectAll(); tab.term.focus(); }
   else if (action === 'send') sendSelection(tab);
+  else if (action === 'scratchpad') sendSelectionToScratchpad(tab);
   else if (action === 'find') openFind();
 });
 
@@ -864,7 +910,8 @@ $('terminal-wrap').addEventListener('mouseleave', () => {
 });
 $('block-copy').title = 'Copy this command and its output, for pasting into a chat';
 $('block-send').title = 'Put this command and its output in Claude\'s message box';
-for (const [id, action] of [['block-copy', copyForChat], ['block-send', sendToClaude]]) {
+$('block-scratch').title = 'Add this command and its output to the end of the scratchpad';
+for (const [id, action] of [['block-copy', copyForChat], ['block-send', sendToClaude], ['block-scratch', sendBlockToScratchpad]]) {
   $(id).addEventListener('click', () => {
     const read = hoveredCommand && readBlock(hoveredCommand.tab, hoveredCommand.block);
     if (read) action(hoveredCommand.tab, read, 'the command');
@@ -1088,6 +1135,52 @@ airlockText.addEventListener('keydown', (e) => {
   if (e.shiftKey) runAirlockSelection();
   else runAirlock();
 });
+
+// In the airlock: Cmd/Ctrl+S saves it as a snippet (or saves the name being typed), and
+// Cmd/Ctrl+R saves it to a repo. Only here, so Ctrl+R still reaches the shell and Cmd+S still
+// saves a Runsheet.
+$('airlock-main').addEventListener('keydown', (e) => {
+  const mod = IS_MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+  if (!mod || e.altKey || e.shiftKey || !['KeyS', 'KeyR'].includes(e.code)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.code === 'KeyR') $('save-team').click();
+  else if (!snippetForm.hidden) snippetForm.requestSubmit();
+  else $('save-snippet').click();
+});
+
+// The ⋯ menu holds the airlock's less frequent actions, so its header never wraps. It's fixed to
+// the window, since the airlock pane would clip it, and opens upward over the terminal.
+const airlockMenu = $('airlock-menu');
+const airlockMenuItems = () => [...airlockMenu.querySelectorAll('button')];
+function setAirlockMenu(open, { focusFirst = false } = {}) {
+  airlockMenu.hidden = !open;
+  $('airlock-more').setAttribute('aria-expanded', String(open));
+  if (!open) return;
+  const r = $('airlock-more').getBoundingClientRect();
+  airlockMenu.style.right = `${Math.max(window.innerWidth - r.right, 8)}px`;
+  airlockMenu.style.bottom = `${window.innerHeight - r.top + 4}px`;
+  if (focusFirst) airlockMenuItems()[0].focus();
+}
+// A click from the keyboard (Enter or Space) has no mouse position, and moves focus into the menu.
+$('airlock-more').addEventListener('click', (e) => setAirlockMenu(airlockMenu.hidden, { focusFirst: e.detail === 0 }));
+airlockMenu.addEventListener('click', (e) => { if (e.target.closest('button')) setAirlockMenu(false); });
+airlockMenu.addEventListener('keydown', (e) => {
+  const items = airlockMenuItems();
+  const at = items.indexOf(document.activeElement);
+  if (e.key === 'Escape') {
+    setAirlockMenu(false);
+    $('airlock-more').focus();
+  } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    items[(at + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+  } else return;
+  e.stopPropagation();
+});
+document.addEventListener('mousedown', (e) => {
+  if (!airlockMenu.hidden && !airlockMenu.contains(e.target) && !$('airlock-more').contains(e.target)) setAirlockMenu(false);
+}, true);
+for (const event of ['blur', 'resize']) window.addEventListener(event, () => setAirlockMenu(false));
 
 // --- Snippets / History sidebar ----------------------------------------------------------
 // Clicking an entry loads it into the airlock; it never runs anything by itself.
@@ -1475,14 +1568,14 @@ $('compare-close').addEventListener('click', () => {
 
 // --- Right pane: Claude or the Runsheet ----------------------------------------------------
 
-let rightTab = prefs.rightTab ?? 'claude';
+let rightTab = ['team', 'personal'].includes(prefs.rightTab) ? 'snippets' : prefs.rightTab ?? 'claude';
 // The chat and web pages are native views above this page, so only the current one is shown.
 function syncNativeViews() {
   window.airlock.setChatVisible(rightTab === 'claude');
   window.airlock.setWebVisible(rightTab === 'web');
 }
-// Team Snippets and Personal Snippets share one pane, each showing its own repos.
-const isSnippetTab = (tab) => tab === 'team' || tab === 'personal';
+// One Snippets tab lists Team and Personal repos together. Before, each had its own tab.
+const isSnippetTab = (tab) => tab === 'snippets';
 function showRightTab(tab) {
   rightTab = tab;
   $('web').hidden = tab !== 'web';
@@ -1493,8 +1586,7 @@ function showRightTab(tab) {
   $('tab-claude').classList.toggle('active', tab === 'claude');
   $('tab-web').classList.toggle('active', tab === 'web');
   $('tab-runsheet').classList.toggle('active', tab === 'runsheet');
-  $('tab-team').classList.toggle('active', tab === 'team');
-  $('tab-personal').classList.toggle('active', tab === 'personal');
+  $('tab-repos').classList.toggle('active', isSnippetTab(tab));
   syncNativeViews();
   // After this script has run, as the snippets section is defined further down.
   if (isSnippetTab(tab)) queueMicrotask(showTeamTab);
@@ -1510,8 +1602,7 @@ $('tab-web').addEventListener('click', () => {
   if (!$('web-address').value) $('web-address').focus();
 });
 $('tab-runsheet').addEventListener('click', () => chooseRightTab('runsheet'));
-$('tab-team').addEventListener('click', () => chooseRightTab('team'));
-$('tab-personal').addEventListener('click', () => chooseRightTab('personal'));
+$('tab-repos').addEventListener('click', () => chooseRightTab('snippets'));
 $('tab-remotes').addEventListener('click', () => chooseRightTab('remotes'));
 
 // --- Web tab -------------------------------------------------------------------------------
@@ -2182,16 +2273,16 @@ syncRunsheetLayout();
 loadRunsheetList();
 reloadRunsheet();
 
-// --- Personal Snippets: snippets kept in git repos ----------------------------------------
+// --- Snippets: Team and Personal snippets kept in git repos -------------------------------
 // One combined list from every repo in Settings (ADR 0006). Like the Runsheet, nothing here runs
 // on its own: Copy sends to the airlock and Run is an explicit click.
 
 const TEAM_REFRESH_MS = 5 * 60 * 1000;
 const snippetRepos = () => prefs.snippetRepos ?? [];
 const KIND_NAMES = { team: 'Team', personal: 'Personal' };
-const shownKind = () => (rightTab === 'personal' ? 'personal' : 'team');
-const tabRepos = () => snippetRepos().filter((r) => r.kind === shownKind());
-let paneKind = null; // which tab the pane was last showing
+const tabRepos = snippetRepos;
+// The filter above the list: '' for everything, 'kind:team' or 'kind:personal', or one repo's id.
+const repoShown = (r, only = $('team-repo-filter').value) => !only || r.id === only || only === `kind:${r.kind}`;
 const repoLabel = (id) => snippetRepos().find((r) => r.id === id)?.label ?? id;
 const repoState = new Map(); // repo id → { list, error, loadedAt, busy }
 let teamEditing = null; // { repo, file, base } of the snippet being edited; file is null for a new one
@@ -2225,7 +2316,6 @@ async function loadRepo(repo) {
   const next = { ...repoState.get(repo.id), busy: false, error: error ?? '' };
   if (list) Object.assign(next, { list: list.map((s) => parseTeamSnippet(s, repo.id)), loadedAt: Date.now() });
   repoState.set(repo.id, next);
-  if (repo.kind !== shownKind()) return;
   showTeamState();
   renderTeam();
 }
@@ -2305,14 +2395,19 @@ function teamEntry(s) {
 function fillRepoPickers() {
   const repos = tabRepos();
   const option = (value, text) => Object.assign(document.createElement('option'), { value, textContent: text });
+  const bothKinds = new Set(repos.map((r) => r.kind)).size > 1;
   const filter = $('team-repo-filter');
   const shown = filter.value;
-  filter.replaceChildren(option('', 'All repos'), ...repos.map((r) => option(r.id, r.label)));
-  filter.value = repos.some((r) => r.id === shown) ? shown : '';
+  filter.replaceChildren(
+    option('', 'All snippets'),
+    ...(bothKinds ? Object.entries(KIND_NAMES).map(([kind, name]) => option(`kind:${kind}`, name)) : []),
+    ...repos.map((r) => option(r.id, bothKinds ? `${r.label} (${KIND_NAMES[r.kind]})` : r.label)),
+  );
+  filter.value = [...filter.options].some((o) => o.value === shown) ? shown : '';
   filter.hidden = repos.length < 2;
   const picker = $('team-repo');
   const picked = picker.value;
-  picker.replaceChildren(...repos.map((r) => option(r.id, r.label)));
+  picker.replaceChildren(...repos.map((r) => option(r.id, bothKinds ? `${r.label} (${KIND_NAMES[r.kind]})` : r.label)));
   if (repos.some((r) => r.id === picked)) picker.value = picked;
   picker.hidden = repos.length < 2;
 }
@@ -2325,12 +2420,12 @@ function renderTeam() {
   if (!repos.length) {
     showTeamState();
     const open = teamButton('Open Settings', '', () => showView('settings'));
-    list.replaceChildren(teamMessage(`Add a git repo in Settings and set it to show in ${KIND_NAMES[shownKind()]} Snippets.`, open));
+    list.replaceChildren(teamMessage('Add a Team or Personal git repo in Settings to keep snippets here.', open));
     return;
   }
   const only = $('team-repo-filter').value;
   const words = $('team-filter').value.toLowerCase().split(/\s+/).filter(Boolean);
-  const shown = repos.filter((r) => !only || r.id === only)
+  const shown = repos.filter((r) => repoShown(r, only))
     .flatMap((r) => repoState.get(r.id)?.list ?? [])
     .filter((s) => {
       const hay = `${s.name}\n${s.command}\n${s.by ?? ''}`.toLowerCase();
@@ -2338,7 +2433,7 @@ function renderTeam() {
     })
     .sort((a, b) => a.name.localeCompare(b.name) || repoLabel(a.repo).localeCompare(repoLabel(b.repo)));
   const rows = shown.map(teamEntry);
-  const errors = repos.filter((r) => (!only || r.id === only) && repoState.get(r.id)?.error);
+  const errors = repos.filter((r) => repoShown(r, only) && repoState.get(r.id)?.error);
   rows.unshift(...errors.map((r) => teamMessage(`${r.label}: ${repoState.get(r.id).error}`)));
   if (!rows.length) {
     const loaded = repos.some((r) => repoState.get(r.id)?.loadedAt);
@@ -2353,7 +2448,9 @@ function renderTeam() {
 function openTeamForm({ repo = null, file = null, base = null, name = '', command = '' } = {}) {
   fillRepoPickers();
   const repos = tabRepos();
-  const start = repo ?? (repos.some((r) => r.id === prefs.lastSnippetRepo) ? prefs.lastSnippetRepo : repos[0]?.id);
+  // Starts in the repo the list is showing, else the last one used that the list shows.
+  const showing = repos.filter((r) => repoShown(r));
+  const start = repo ?? (showing.some((r) => r.id === prefs.lastSnippetRepo) ? prefs.lastSnippetRepo : showing[0]?.id ?? repos[0]?.id);
   teamEditing = { file, base };
   $('team-repo').value = start;
   $('team-repo').disabled = Boolean(file);
@@ -2414,12 +2511,6 @@ $('team-list').addEventListener('copy', () => {
 });
 
 function showTeamTab() {
-  if (paneKind !== shownKind()) {
-    paneKind = shownKind();
-    closeTeamForm();
-    $('team-filter').value = '';
-    $('team-filter').placeholder = `Search ${KIND_NAMES[paneKind].toLowerCase()} snippets`;
-  }
   fillRepoPickers();
   renderTeam();
   const stale = (r) => Date.now() - (repoState.get(r.id)?.loadedAt ?? 0) > 30000;
@@ -2432,9 +2523,7 @@ setInterval(() => { if (isSnippetTab(rightTab) && !document.hidden) loadTeam(); 
 $('save-team').addEventListener('click', () => {
   const command = airlockText.value.replace(/\s+$/, '');
   if (!command.trim()) { toast('Put the command in the airlock first.', { error: true }); return; }
-  const last = snippetRepos().find((r) => r.id === prefs.lastSnippetRepo);
-  const kind = isSnippetTab(rightTab) ? rightTab : last?.kind ?? 'team';
-  if (kind !== rightTab) chooseRightTab(kind);
+  if (!isSnippetTab(rightTab)) chooseRightTab('snippets');
   showTeamTab();
   openTeamForm({ name: snippetForm.hidden ? '' : $('snippet-name').value.trim(), command });
   if (!$('team-name').value) $('team-name').focus();
@@ -2486,9 +2575,9 @@ function renderRepoSettings() {
     };
     field('label', 'Label', 'Work');
     const kindId = `repo-${r.id}-kind`;
-    const kindLabel = Object.assign(document.createElement('label'), { htmlFor: kindId, textContent: 'Show in' });
+    const kindLabel = Object.assign(document.createElement('label'), { htmlFor: kindId, textContent: 'Kind' });
     const kind = Object.assign(document.createElement('select'), { id: kindId });
-    for (const [value, text] of Object.entries(KIND_NAMES)) kind.append(Object.assign(document.createElement('option'), { value, textContent: `${text} Snippets` }));
+    for (const [value, text] of Object.entries(KIND_NAMES)) kind.append(Object.assign(document.createElement('option'), { value, textContent: text }));
     kind.value = r.kind;
     kind.addEventListener('change', () => { r.kind = kind.value; saveRepos(); });
     set.append(kindLabel, kind);
@@ -2563,7 +2652,7 @@ $('setting-update-check').addEventListener('click', async () => {
     $('setting-update-check').disabled = false;
   }
 });
-$('setting-theme').value = prefs.theme ?? 'dark';
+$('setting-theme').value = prefs.theme ?? 'airlock';
 $('setting-theme').addEventListener('change', (e) => saveSetting('theme', e.target.value));
 
 const snippetsDirLabel = () => prefs.snippetsDir || `${window.airlock.initial.dataDir} (default)`;

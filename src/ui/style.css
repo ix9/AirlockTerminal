@@ -39,6 +39,52 @@
   --syn-title: #dcdcaa;
   --syn-type: #4ec9b0;
   --syn-variable: #9cdcfe;
+
+  /* The Refined layout's cards (ADR 0011). Themes can override these; by default they follow
+     the colours above. */
+  --term-bg: var(--bg);    /* the terminal and editor cards: the same as the terminal theme */
+  --surface: var(--bg);    /* the airlock card, segmented controls */
+  --edge: color-mix(in srgb, var(--text) 11%, transparent); /* card and control outlines */
+  --spark: var(--warn);    /* worth noticing: updates, unsaved changes */
+}
+
+/* "Airlock", the default: navy from the app icon, with cyan for actions. */
+:root[data-theme="airlock"] {
+  color-scheme: dark;
+  --bg: #0A1020;
+  --panel: #0A1020;
+  --term-bg: #070C18;
+  --surface: #0F1729;
+  --input: #142037;
+  --hover: #1C2B4A;
+  --list-hover: #121C33;
+  --border: #1E2A44;
+  --control-border: #26344F;
+  --edge: #1E2A44;
+  --text: #DCE6F5;
+  --muted: #8392AD;
+  --dim: #5A6781;
+  --accent: #22D3EE;
+  --accent-hover: #67E8F9;
+  --focus: #22D3EE;
+  --on-accent: #04252D;
+  --warn: #FBBF24;
+  --spark: #FDE68A;
+  --error: #F87171;
+  --env-key: #7DD3FC;
+  --shadow: rgba(0, 0, 0, 0.55);
+  --diff-del: rgba(248, 113, 113, 0.13);
+  --diff-del-strong: rgba(248, 113, 113, 0.4);
+  --diff-add: rgba(74, 222, 128, 0.12);
+  --diff-add-strong: rgba(74, 222, 128, 0.35);
+  --band: rgba(34, 211, 238, 0.07);
+  --syn-comment: #6B7A96;
+  --syn-keyword: #C4B5FD;
+  --syn-string: #86EFAC;
+  --syn-number: #FDBA74;
+  --syn-title: #FDE68A;
+  --syn-type: #7DD3FC;
+  --syn-variable: #F9A8D4;
 }
 
 /* VS Code "Light Modern" */
@@ -109,6 +155,7 @@
   --syn-title: #dcdcaa;
   --syn-type: #4ec9b0;
   --syn-variable: #9cdcfe;
+  --edge: var(--border);
 }
 
 /* VS Code "Monokai" */
@@ -197,11 +244,10 @@ body {
 
 /* --- Title bar ----------------------------------------------------------------------- */
 
-/* The app icon, then the terminal tabs (browser-style), then Claude usage. The active tab takes
-   the toolbar's colour and sits over the bar's bottom border, so it joins the toolbar below. */
+/* The app icon, then the terminal tabs (as pills), then Claude usage. */
 #titlebar {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 4px;
   /* Leave room for the OS window buttons (Windows/Linux right, macOS left). */
   padding: 0 calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px) 0 12px;
@@ -267,8 +313,10 @@ body {
 #hsplit { grid-area: hsplit; }
 #airlock { grid-area: airlock; }
 
-.splitter { background: var(--border); }
-.splitter:hover, .splitter.dragging { background: var(--focus); }
+.splitter { background: transparent; }
+/* Cards sit on either side of the dividers; only the one between the panes draws a line. */
+#vsplit { background: linear-gradient(var(--border), var(--border)) center / 1px 100% no-repeat; }
+.splitter:hover, .splitter.dragging, #vsplit:hover, #vsplit.dragging { background: var(--focus); }
 #vsplit { cursor: col-resize; }
 #hsplit { cursor: row-resize; }
 
@@ -279,26 +327,36 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
+  padding: 8px;
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
 }
+/* 42px tall, the same as the tabs across the right pane, so the cards below start level. */
+#toolbar button, #toolbar select { height: 26px; }
+#toolbar button.icon { width: 30px; }
+#toolbar button.icon.labelled { width: auto; gap: 6px; padding: 0 10px 0 8px; } /* an icon with its name */
+/* Pickers size to their longest option; capped so the toolbar stays on one row. */
+#shell, #aws { max-width: 200px; }
 
-#terminal-wrap { position: relative; min-height: 0; overflow: hidden; }
+/* The terminal is a card. Everything laid over it (scratchpad, settings) shares its corners. */
+#terminal-wrap {
+  position: relative; min-height: 0; overflow: hidden;
+  margin: 0 8px; border: 1px solid var(--edge); border-radius: 10px; background: var(--term-bg);
+}
 #terminal { position: relative; height: 100%; overflow: hidden; }
 /* All terminals stay laid out at full size so background shells never see a resize. Hidden
    rather than just covered, so they can't take keyboard focus while out of sight. */
-.terminal-host { position: absolute; inset: 4px 0 0 8px; visibility: hidden; }
+.terminal-host { position: absolute; inset: 8px 2px 4px 10px; visibility: hidden; }
 .terminal-host.active { visibility: inherit; }
 
 /* Find in the terminal: always in the toolbar, at its right-hand end. It shrinks before the
    toolbar wraps, since a second toolbar row would resize the terminal. */
-#find { display: flex; align-items: center; gap: 2px; flex: 0 1 300px; min-width: 150px; margin-left: auto; }
-#find-input { flex: 1 1 auto; min-width: 60px; height: 24px; }
+/* Wrapping is decided on the 200px basis, so Find gives up its extra width before anything wraps. */
+#find { display: flex; align-items: center; gap: 2px; flex: 1 1 200px; min-width: 150px; max-width: 300px; margin-left: auto; }
+#find-input { flex: 1 1 auto; min-width: 60px; height: 26px; }
 #find-input.invalid { border-color: var(--error); }
 #find-count { padding: 0 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
 #find-count:empty { display: none; }
-#find button { padding: 0 6px; background: transparent; }
+#find button { padding: 0 6px; background: transparent; border-color: transparent; }
 #find button:hover { background: var(--hover); }
 #find .find-toggle[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 
@@ -366,8 +424,7 @@ body {
 
 /* Shrinks before anything else in the title bar, then scrolls sideways. */
 #terminal-tabs {
-  display: flex; flex: 0 1 auto; align-items: flex-end; gap: 2px; min-width: 0;
-  margin-bottom: -1px; /* over the title bar's border, so the active tab joins the toolbar */
+  display: flex; flex: 0 1 auto; align-items: center; gap: 4px; min-width: 0;
   overflow-x: auto; scrollbar-width: none;
 }
 #terminal-tabs .tab {
@@ -377,10 +434,10 @@ body {
   align-items: center;
   gap: 8px;
   max-width: 220px;
-  height: 36px;
-  padding: 0 6px 0 14px;
+  height: 30px;
+  padding: 0 6px 0 12px;
   border: none;
-  border-radius: 8px 8px 0 0;
+  border-radius: 8px;
   background: none;
   box-shadow: none;
   color: var(--muted);
@@ -393,9 +450,9 @@ body {
 }
 #terminal-tabs .tab:hover { background: color-mix(in srgb, var(--hover) 50%, transparent); color: var(--text); }
 #terminal-tabs .tab.active, #terminal-tabs .tab.active:hover {
-  background: var(--panel);
+  background: var(--input);
   color: var(--text);
-  box-shadow: inset 0 2px 0 var(--accent);
+  box-shadow: inset 0 0 0 1px var(--edge);
 }
 /* A dot: green while the shell runs, grey once it has exited. */
 #terminal-tabs .tab::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--team-hover); }
@@ -506,19 +563,28 @@ body {
 #statusbar span:not(.spacer):empty { display: none; }
 #status-message { flex-shrink: 0; max-width: 70%; overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 600; }
 #status-cwd { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-#status-update { flex: none; padding: 1px 8px; border: none; border-radius: var(--radius); background: var(--focus); color: #fff; font-size: 12px; }
+#status-update { flex: none; height: 18px; padding: 0 9px; border: none; border-radius: 999px; background: color-mix(in srgb, var(--spark) 16%, transparent); color: var(--spark); font-size: 11.5px; font-weight: 600; }
+#status-update::before { content: "✦ "; }
+#status-update:hover { background: color-mix(in srgb, var(--spark) 26%, transparent); }
 #status-update[hidden] { display: none; }
 #setting-update-state { color: var(--muted); }
 
 /* --- Right pane: Claude and the Runsheet ------------------------------------------------------ */
 
-#right { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; }
-#right-tabs { background: var(--panel); }
-#right-tabs .tab { flex: none; height: 32px; padding: 0 16px; } /* lines up with the toolbar */
+#right { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--panel); }
+/* A segmented control, 42px tall with its margins, the same as the toolbar opposite. */
+#right-tabs { justify-self: start; max-width: calc(100% - 16px); margin: 6px 8px; overflow-x: auto; scrollbar-width: none; }
+#right-tabs .tab { flex: none; padding: 0 12px; }
 #right-body { position: relative; min-height: 0; }
-#chat { height: 100%; }
+/* Each pane is a card. Claude and the Web tab are native views, rounded to match in main.js. */
+#chat, #web, #runsheet, #team, #remotes {
+  position: absolute; inset: 0 8px 8px;
+  border: 1px solid var(--edge); border-radius: 10px; overflow: hidden; background: var(--term-bg);
+}
+#chat { border: none; }
+#right-body .pad-bar { background: transparent; }
 
-#runsheet { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+#runsheet { display: flex; flex-direction: column; }
 #runsheet[hidden], #runsheet-files[hidden], #runsheet-page[hidden], #runsheet-view[hidden], #runsheet-band[hidden], #runsheet-block-actions[hidden] { display: none; }
 #runsheet-name { margin-left: 6px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #runsheet .pad-bar { user-select: none; }
@@ -526,7 +592,7 @@ body {
 #runsheet-bar[hidden], #runsheet-bar [hidden] { display: none; }
 
 /* Web tab. The page itself is a native view laid over #web-slot. */
-#web { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+#web { display: flex; flex-direction: column; }
 #web[hidden] { display: none; }
 #web-bar .nav { flex: none; width: 28px; padding: 0; }
 #web-bar button:disabled { opacity: 0.45; cursor: default; }
@@ -535,7 +601,7 @@ body {
 #web-address { width: 100%; }
 #web-auto-run { flex: none; }
 #web-auto-run.on { background: var(--accent); color: var(--on-accent); }
-#web-slot { position: relative; flex: 1; min-height: 0; }
+#web-slot { position: relative; flex: 1; min-height: 0; margin: 0 4px 4px; border-radius: 8px; }
 #web-empty { max-width: 480px; margin: 0; padding: 24px; color: var(--muted); line-height: 1.5; }
 #setting-web-sites { margin: 0 0 6px; padding: 0; list-style: none; }
 #setting-web-sites li { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
@@ -601,7 +667,7 @@ body {
   z-index: 1;
   flex: none;
   padding: 0 12px 0 8px;
-  background: var(--bg);
+  background: var(--term-bg);
   color: var(--dim);
   text-align: right;
   user-select: none;
@@ -646,7 +712,7 @@ body {
 .env-badge, [data-env="prod"] > .env-badge, .env-badge[data-env="prod"] { background: color-mix(in srgb, var(--error) 22%, transparent); color: var(--error); }
 [data-env="test"] > .env-badge, .env-badge[data-env="test"] { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
 [data-env="dev"] > .env-badge, .env-badge[data-env="dev"] { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
-#terminal-tabs .tab[data-env="prod"], #terminal-tabs .tab.active[data-env="prod"] { box-shadow: inset 0 2px 0 var(--error); }
+#terminal-tabs .tab[data-env="prod"], #terminal-tabs .tab.active[data-env="prod"] { box-shadow: inset 0 0 0 1px var(--error); }
 
 /* The active remote tab, in the toolbar */
 #remote-chip { display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 10px; border-radius: var(--radius); background: var(--input); font-size: 12px; white-space: nowrap; min-width: 0; overflow: hidden; }
@@ -680,10 +746,9 @@ body {
 #airlock-main header:has(#airlock-target:not([hidden])) .section-title { flex: none; overflow: visible; }
 #airlock-target[hidden] { display: none; }
 #airlock.prod #airlock-target { color: var(--error); }
-#airlock.prod #airlock-text { border-color: var(--error); }
 
 /* The Remotes pane */
-#remotes { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+#remotes { display: flex; flex-direction: column; }
 #remotes[hidden], #remote-form[hidden], #remote-list[hidden] { display: none; }
 #remotes-filter { flex: 0 1 260px; min-width: 80px; }
 #remotes-state { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); font-size: 12px; }
@@ -734,7 +799,7 @@ body {
 
 /* --- Team snippets ---------------------------------------------------------------------- */
 
-#team { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+#team { display: flex; flex-direction: column; }
 #team[hidden], #team-form[hidden] { display: none; }
 #team-filter { flex: 0 1 260px; min-width: 80px; }
 #team-repo-filter[hidden], #team-repo[hidden] { display: none; }
@@ -776,10 +841,10 @@ body {
 #team-list .block-actions { position: absolute; top: 4px; right: 4px; visibility: hidden; }
 #team-list pre:hover .block-actions { visibility: visible; }
 #team-list .message { padding: 12px 0; border: none; color: var(--muted); line-height: 1.5; }
-/* Copy | Run: two buttons joined into one control. */
+/* Copy | Run (or Copy | Chat → | Scratchpad →): buttons joined into one control. */
 .block-actions { display: flex; user-select: none; border-radius: var(--radius); box-shadow: 0 1px 4px var(--shadow); }
-.block-actions button:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.block-actions button:last-child { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
+.block-actions button:not(:last-child) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.block-actions button:not(:first-child) { border-top-left-radius: 0; border-bottom-left-radius: 0; margin-left: -1px; }
 
 /* Syntax colours. Highlight.js marks up tokens; each theme supplies the colours. */
 #runsheet .hljs-comment, #runsheet .hljs-quote { color: var(--syn-comment); }
@@ -794,7 +859,7 @@ body {
 
 /* --- Settings ----------------------------------------------------------------------------- */
 
-#settings { position: absolute; inset: 0; z-index: 1; overflow-y: auto; padding: 8px 16px 16px; background: var(--bg); }
+#settings { position: absolute; inset: 0; z-index: 1; overflow-y: auto; padding: 8px 16px 16px; background: var(--term-bg); }
 #settings[hidden] { display: none; }
 #settings section { max-width: 640px; margin-bottom: 20px; }
 #settings h2 { margin: 12px 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
@@ -807,22 +872,32 @@ body {
 
 #airlock {
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: 240px 1fr;
+  gap: 8px;
   min-height: 0;
   overflow: hidden;
+  padding: 0 8px 8px;
   background: var(--panel);
 }
+/* A card: a header with Run and the ⋯ menu, over the text. */
 #airlock-main {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   min-width: 0;
   min-height: 0;
-  padding: 6px 8px 8px;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  transition: border-color 0.6s, box-shadow 0.6s;
 }
-#airlock-main header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+#airlock-main:focus-within { border-color: color-mix(in srgb, var(--focus) 55%, transparent); }
+#airlock-main:has(#airlock-text.filled) { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); transition: none; }
+#airlock.prod #airlock-main { border-color: var(--error); }
+#airlock-main header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 6px 6px 12px; border-bottom: 1px solid var(--border); }
+#airlock-main header .spacer { flex: 1; }
 /* The title gives way before the buttons wrap. */
-#airlock-main .section-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: clip; }
+#airlock-main .section-title { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: clip; }
 #snippet-form { display: flex; gap: 6px; }
 #snippet-form[hidden] { display: none; }
 
@@ -831,42 +906,33 @@ body {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: var(--bg);
-  border-right: 1px solid var(--border);
 }
-#other-folders-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; cursor: pointer; user-select: none; }
+#other-folders-row { display: flex; align-items: center; gap: 6px; padding: 6px 4px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: 12px; cursor: pointer; user-select: none; }
 #other-folders-row[hidden] { display: none; }
 #library-list li.other .name { color: var(--muted); }
-.tabs { display: flex; border-bottom: 1px solid var(--border); }
+/* Tabs are segmented controls: a tray with the chosen one raised. */
+.tabs { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--edge); border-radius: 9px; background: var(--surface); }
 .tab {
   flex: 1;
-  height: 30px;
+  height: 24px;
+  padding: 0 10px;
   background: none;
   border: none;
-  border-radius: 0;
-  border-bottom: 1px solid transparent;
+  border-radius: 7px;
   color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
 }
-.tab:hover { background: none; color: var(--text); }
-/* The active tab glows in the theme's accent colour and keeps its underline. */
-.tab.active {
-  color: var(--text);
-  background: linear-gradient(to top, color-mix(in srgb, var(--accent) 28%, transparent), color-mix(in srgb, var(--accent) 8%, transparent));
-  border-bottom-color: var(--accent);
-  box-shadow: inset 0 -2px 0 var(--accent), 0 2px 10px -2px color-mix(in srgb, var(--accent) 60%, transparent);
-}
-.tab.active:hover { background: linear-gradient(to top, color-mix(in srgb, var(--accent) 34%, transparent), color-mix(in srgb, var(--accent) 12%, transparent)); }
-#filter { margin: 6px; }
+.tab:hover { background: var(--list-hover); color: var(--text); }
+.tab.active, .tab.active:hover { background: var(--input); color: var(--text); box-shadow: inset 0 0 0 1px var(--edge); }
+#filter { margin: 6px 0; }
 #library-list { flex: 1; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
 #library-list li {
   display: flex;
   align-items: baseline;
   gap: 6px;
   padding: 4px 8px;
+  border-radius: 6px;
   cursor: pointer;
 }
 #library-list li:hover { background: var(--list-hover); }
@@ -908,18 +974,14 @@ input:focus { border-color: var(--focus); }
 #airlock-text {
   flex: 1;
   resize: none;
-  padding: 8px;
-  background: var(--bg);
+  padding: 10px 12px;
+  background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 2px;
+  border: none;
   font: var(--airlock-font-size, 13px) "Cascadia Mono", Menlo, Consolas, monospace;
   white-space: pre;
   outline: none;
-  transition: border-color 0.6s;
 }
-#airlock-text:focus { border-color: var(--focus); }
-#airlock-text.filled { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); transition: none; }
 
 /* --- Controls ---------------------------------------------------------------------------- */
 
@@ -944,4 +1006,20 @@ select { padding: 0 6px; }
 button.icon[hidden] { display: none; }
 button.icon { display: inline-flex; align-items: center; justify-content: center; width: 28px; padding: 0; }
 button.icon svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linejoin: round; }
+/* A label with an arrow after it, as in the terminal's Chat → and Scratchpad → */
+button.arrow { display: inline-flex; align-items: center; gap: 4px; }
+button.arrow svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 button:focus-visible, select:focus-visible { outline: 1px solid var(--focus); outline-offset: -1px; }
+/* Shortcut hints, added from data-keys in renderer.js */
+button kbd { margin-left: 6px; font: inherit; font-size: 11px; opacity: 0.65; }
+
+/* Menus, like the airlock's ⋯. Fixed to the window and placed from renderer.js. */
+.menu {
+  position: fixed; z-index: 50; display: flex; flex-direction: column; min-width: 200px; padding: 4px;
+  background: var(--input); border: 1px solid var(--edge); border-radius: 10px; box-shadow: 0 12px 30px var(--shadow);
+}
+.menu[hidden] { display: none; }
+.menu button { display: flex; align-items: center; height: 28px; padding: 0 10px; background: none; border: none; border-radius: 6px; text-align: left; }
+.menu button kbd { margin-left: auto; padding-left: 20px; }
+.menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
+.menu hr { margin: 4px 2px; border: 0; border-top: 1px solid var(--border); }

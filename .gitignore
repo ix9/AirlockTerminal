@@ -5,3 +5,9 @@ dist/
 .DS_Store
 .zcompdump*
 .zsh_history
+# Signing material: never commit (it lives in GitHub secrets and a password manager)
+*.p12
+*.p8
+*.cer
+*.certSigningRequest
+*.key
