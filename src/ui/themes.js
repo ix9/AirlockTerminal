@@ -3,6 +3,17 @@
 // minimumContrastRatio lets xterm.js adjust any that would be hard to read.
 
 const TERMINAL_THEMES = {
+  // The default, from the app icon: navy, with cyan for the cursor.
+  airlock: {
+    minimumContrastRatio: 1,
+    colors: {
+      background: '#070C18', foreground: '#DCE6F5', cursor: '#22D3EE', cursorAccent: '#070C18', selectionBackground: '#22D3EE40',
+      black: '#1E2A44', red: '#F87171', green: '#4ADE80', yellow: '#FBBF24',
+      blue: '#60A5FA', magenta: '#C084FC', cyan: '#22D3EE', white: '#DCE6F5',
+      brightBlack: '#64748B', brightRed: '#FCA5A5', brightGreen: '#86EFAC', brightYellow: '#FDE68A',
+      brightBlue: '#93C5FD', brightMagenta: '#D8B4FE', brightCyan: '#67E8F9', brightWhite: '#F8FAFC',
+    },
+  },
   dark: {
     minimumContrastRatio: 1,
     colors: {

@@ -49,8 +49,8 @@ the middle of the workflow without slowing it down.
 - **Terminal tabs:** each tab has its own shell, working directory, env strip and AWS selection.
   The airlock and scratchpad are shared and act on the active terminal
   ([ADR 0004](adr/0004-tabs-and-saved-state.md)).
-- **Themes:** Dark Modern, Light Modern, high contrast, Monokai, Oceanic Next, or following the
-  system.
+- **Themes:** Airlock (the default, from the app icon), Dark Modern, Light Modern, high contrast,
+  Monokai, Oceanic Next, or following the system ([ADR 0011](adr/0011-refined-layout.md)).
 - **Runsheet:** a tab beside Claude listing the files in a chosen folder. Scripts open in an
   editor with syntax highlighting, where Ctrl+Enter runs the highlighted text or the block at the
   cursor ([ADR 0009](adr/0009-runsheet-editor.md)). Markdown opens as a formatted page, with its
@@ -65,7 +65,8 @@ the middle of the workflow without slowing it down.
 - **Settings** are remembered: window size, divider positions, font size, last shell and theme.
 - **Saved terminal output** (opt-in) restores tabs and their output after a restart.
 - **Snippets folder:** snippets can live in a git or synced folder.
-- **Installers:** unsigned builds for Windows, macOS and Linux, on GitHub Releases.
+- **Installers** for Windows, macOS and Linux, on GitHub Releases. Since 0.6 the macOS build is
+  signed and notarized; Windows is still unsigned.
 
 ## Out of scope (for now)
 - Using an existing browser profile.

@@ -13,5 +13,5 @@
   client. The config may use `Include`, so resolve it rather than scanning for `Host` lines. Hide
   the AWS picker in those tabs, and expect Save and downloads to fall back to Downloads, since
   remote shells don't report their directory.
-- [ ] **Signed installers,** if the app is ever published for other people. Needs a paid Apple
-  Developer account and a Windows certificate.
+- [ ] **Signed Windows installer.** macOS is signed and notarized since 0.6. Windows needs a code
+  signing certificate (or Azure Trusted Signing) to get past SmartScreen.

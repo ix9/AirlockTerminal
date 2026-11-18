@@ -50,7 +50,8 @@ to run a server for it.
   someone else changed or deleted it in the meantime, the app says so and keeps the user's text.
   If the push loses a race, it starts again from the server's version (up to 3 tries).
 - **Search** runs in the app over the names and commands.
-- **Two tabs** next to Runsheet, Team Snippets and Personal Snippets. Each repo is set to show in
+- **Two tabs** next to Runsheet, Team Snippets and Personal Snippets. (Since 0.6, one Snippets tab
+  with a Team / Personal / repo filter: [ADR 0011](0011-refined-layout.md).) Each repo is set to show in
   one of them (repos from before this split go in Team). A tab with several repos lists their
   snippets together, each labelled with its repo, with a filter for one repo. The airlock's button
   saves into the snippets tab that's showing, or else the one holding the repo used last. A new snippet goes to the repo picked in the

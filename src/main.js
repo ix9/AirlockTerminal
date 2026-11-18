@@ -37,6 +37,7 @@ function writeFileAtomic(file, text, options) {
 }
 
 const THEMES = {
+  airlock: { background: '#0A1020', symbols: '#DCE6F5' },
   dark: { background: '#181818', symbols: '#cccccc' },
   light: { background: '#f8f8f8', symbols: '#3b3b3b' },
   contrast: { background: '#000000', symbols: '#ffffff' },
@@ -67,7 +68,7 @@ const SETTING_RULES = {
   airlockHeight: isPercent,
   scratchLeft: isPercent,
   saveScrollback: (v) => typeof v === 'boolean',
-  rightTab: (v) => ['claude', 'web', 'runsheet', 'team', 'personal', 'remotes'].includes(v),
+  rightTab: (v) => ['claude', 'web', 'runsheet', 'snippets', 'team', 'personal', 'remotes'].includes(v), // team, personal: before 0.6
   doubleCopyRun: (v) => typeof v === 'boolean',
   copyOnSelect: (v) => typeof v === 'boolean',
   showOtherFolderSnippets: (v) => typeof v === 'boolean',
@@ -81,7 +82,7 @@ const SETTING_RULES = {
   checkUpdates: (v) => typeof v === 'boolean', // ADR 0010
 };
 
-let settings = { theme: 'dark' };
+let settings = { theme: 'airlock' };
 let settingsTimer = null;
 
 function loadSettings() {
@@ -97,11 +98,15 @@ function loadSettings() {
     if (typeof raw.runsheetPath === 'string') settings.runsheetPath = raw.runsheetPath;
     if (typeof raw.runsheetFolder === 'string') settings.runsheetFolder = raw.runsheetFolder;
     if (typeof raw.skippedUpdate === 'string') settings.skippedUpdate = raw.skippedUpdate;
+    // Airlock became the default theme in 0.6. Dark Modern was the default before, so a saved
+    // "dark" is moved over once; choosing Dark Modern again after that sticks.
+    if (settings.theme === 'dark' && raw.airlockThemeOffered !== true) settings.theme = 'airlock';
     if (typeof raw.webUrl === 'string' && /^https?:\/\//i.test(raw.webUrl)) settings.webUrl = raw.webUrl;
     if (Array.isArray(raw.webAutoRunSites)) settings.webAutoRunSites = raw.webAutoRunSites.filter((s) => typeof s === 'string' && s.startsWith('https://'));
     const w = raw.window;
     if (w && [w.x, w.y, w.width, w.height].every(Number.isFinite)) settings.window = { ...w, maximized: w.maximized === true };
   } catch {} // no file yet, or unreadable: defaults
+  settings.airlockThemeOffered = true;
 }
 
 function flushSettings() {
@@ -133,7 +138,7 @@ function rememberWindow() {
 
 // --- Themes: the renderer styles itself; this covers what only this process can reach --------
 
-const resolvedTheme = () => (settings.theme === 'system' ? (nativeTheme.shouldUseDarkColors ? 'dark' : 'light') : settings.theme);
+const resolvedTheme = () => (settings.theme === 'system' ? (nativeTheme.shouldUseDarkColors ? 'airlock' : 'light') : settings.theme);
 
 // Also what claude.ai sees as prefers-color-scheme, so the chat follows the app.
 function applyThemeSource() {
@@ -282,6 +287,7 @@ function createWindow() {
     return { action: 'deny' };
   });
   chatGesture = trackCopyGestures(chat.webContents);
+  chat.setBorderRadius(10); // its placeholder is a rounded card
   win.contentView.addChildView(chat);
   chat.webContents.loadURL(CHAT_URL);
 
@@ -339,6 +345,7 @@ ipcMain.on('terminal:menu', (e, state) => {
     item('Select All', 'select-all'),
     { type: 'separator' },
     item('Send to Claude', 'send', mac ? 'Cmd+Shift+Enter' : 'Ctrl+Shift+Enter', selected),
+    item('Send to Scratchpad', 'scratchpad', undefined, selected),
     { type: 'separator' },
     item('Find…', 'find', mac ? 'Cmd+F' : 'Ctrl+Shift+F'),
   ]).popup({ window: win });
@@ -1541,6 +1548,7 @@ function ensureWeb() {
     }
   });
   webGesture = trackCopyGestures(c);
+  web.setBorderRadius(8); // its slot, inside the Web card
   win.contentView.addChildView(web);
   if (webBounds) web.setBounds(webBounds);
   web.setVisible(webVisible);
@@ -1879,8 +1887,9 @@ ipcMain.handle('update:show', async (e) => {
 });
 
 app.whenReady().then(() => {
-  // Packaged builds get their icon from the app bundle.
-  if (process.platform === 'darwin' && !app.isPackaged) app.dock.setIcon(APP_ICON);
+  // Packaged builds get their icon from the app bundle (build/icon.icns). This one has the same
+  // inset and shadow, so it sits right beside other apps in the Dock.
+  if (process.platform === 'darwin' && !app.isPackaged) app.dock.setIcon(path.join(__dirname, 'assets', 'icon-macos.png'));
   loadSettings();
   removeStaleClones();
   applyThemeSource();

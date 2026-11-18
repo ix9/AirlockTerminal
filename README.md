@@ -26,12 +26,19 @@ title bar and needs its own claude.ai sign-in.
 
 ## Installers
 `npm run dist` builds an installer for the current OS in `dist/`. Pushing a `v*` tag builds all
-three on GitHub Actions and attaches them to a draft release.
+three on GitHub Actions and attaches them to a draft release: a DMG for Apple silicon Macs, an
+installer for 64-bit Windows, and an AppImage for 64-bit Linux.
 
-Builds are unsigned, so each OS warns on first launch:
-- **macOS:** the build is ad-hoc signed, so downloaded copies get blocked. Open the app once from
-  **System Settings > Privacy & Security > Open Anyway**.
-- **Windows:** in the SmartScreen prompt, choose **More info > Run anyway**.
+The app icon's files are in `build/` (macOS `.icns`, Windows `.ico`, Linux PNGs). Their source
+SVGs are `src/assets/icon.svg` and `src/assets/icon-macos.svg`.
+
+**macOS** builds are signed with a Developer ID and notarized by Apple, so they open without a
+warning. Tag builds sign in GitHub Actions, using five repo secrets: `MAC_CERT_P12_BASE64`,
+`MAC_CERT_PASSWORD`, `APPLE_API_KEY_P8`, `APPLE_API_KEY_ID` and `APPLE_API_ISSUER`. Only the
+signing step of a `v*` tag build can see them. Locally, `npm run dist` signs with a Developer ID
+in your keychain, if there is one.
+
+**Windows** builds are unsigned: in the SmartScreen prompt, choose **More info > Run anyway**.
 
 ## Docs
 - [Objective](docs/OBJECTIVE.md)
@@ -42,6 +49,7 @@ Builds are unsigned, so each OS warns on first launch:
 - [ADR 0008: Remote sessions](docs/adr/0008-remote-sessions.md)
 - [ADR 0009: The Runsheet is always editable](docs/adr/0009-runsheet-editor.md)
 - [ADR 0010: Updates from GitHub Releases](docs/adr/0010-updates-from-github-releases.md)
+- [ADR 0011: Refined layout and the Airlock theme](docs/adr/0011-refined-layout.md)
 - [Dependencies](docs/DEPENDENCIES.md)
 
 ## Licence

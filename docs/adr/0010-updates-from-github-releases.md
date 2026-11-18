@@ -9,15 +9,17 @@ builds all three OSes and attaches them to a **draft** release, which is publish
 Updating today means noticing a release, downloading the installer and running it.
 
 What's already in place:
-- electron-builder already uploads `latest.yml`, `latest-mac.yml`, `latest-linux.yml` and
-  `.blockmap` files with every release. These are the feeds `electron-updater` reads.
+- electron-builder can upload `latest.yml`, `latest-mac.yml`, `latest-linux.yml` and `.blockmap`
+  files with every release. These are the feeds `electron-updater` reads. Phase 1 doesn't need
+  them, so they're turned off (`publishAutoUpdate`, `dmg.writeUpdateInfo` and
+  `nsis.differentialPackage` in `package.json`). Phase 2 turns them back on.
 - Drafts are invisible to updaters, so publishing the draft stays the moment a release goes out.
 
 What limits the options:
-- **macOS builds are ad-hoc signed** (`identity: "-"`). Squirrel.Mac, which `electron-updater` uses
-  on macOS, only installs an update signed by the same Developer ID as the running app. So **no
-  silent install on macOS** until the app is signed and notarized (TODO: *Signed installers*).
-  It also needs a `zip` target next to the `dmg`.
+- **macOS builds were ad-hoc signed** until 0.6; they're now signed with a Developer ID and
+  notarized. Squirrel.Mac, which `electron-updater` uses on macOS, only installs an update signed
+  by the same Developer ID as the running app, so one-click updates are now possible from 0.6
+  onwards (Phase 3). It also needs a `zip` target next to the `dmg`.
 - **Windows NSIS** builds update fine unsigned. Without a `publisherName`, `electron-updater` skips
   the signature check. The download is still checked against the sha512 in `latest.yml`.
 - **Linux AppImage** updates in place when the app is run from the AppImage.
@@ -45,8 +47,8 @@ Phase 1 is A, now built. B is phase 2. Leave C for when signing is done for its 
   Clicking it opens a native dialog with the release notes as plain text, how to install on this
   OS, and:
   - **Download**, which opens the installer for this OS and processor in the browser
-    (`AirlockTerminal-<ver>-<os>-<arch>.<ext>`, the artifact names in `package.json`). An Intel
-    copy running under Rosetta is offered the Apple silicon build. Only addresses under
+    (`AirlockTerminal-<ver>-<os>-<arch>.<ext>`, the artifact names in `package.json`). Only Apple
+    silicon is built for macOS, so on an Intel Mac this opens the release page instead. Only addresses under
     `github.com/ix9/AirlockTerminal/releases/` are ever opened;
   - **Release Notes**, which opens the release page;
   - **Skip This Version**, which hides the notice until a newer version is out;
@@ -57,7 +59,8 @@ Phase 1 is A, now built. B is phase 2. Leave C for when signing is done for its 
 - Failed checks are silent apart from that Settings line.
 
 ### Phase 2: install in place (Windows and Linux)
-- Add `electron-updater`, pinned, and list it in DEPENDENCIES.md. `autoDownload` stays off;
+- Turn the update files back on (see Context). Add `electron-updater`, pinned, and list it in
+  DEPENDENCIES.md. `autoDownload` stays off;
   `autoInstallOnAppQuit` stays off.
 - The same status bar item offers **Download and restart**. It downloads, using the blockmap for a
   small delta, checks the sha512, and asks before restarting. Restarting closes terminals, so the
@@ -66,8 +69,9 @@ Phase 1 is A, now built. B is phase 2. Leave C for when signing is done for its 
 - Since an update is code from the release, protect it: require 2FA on the account, protect
   `v*` tags, and keep the release a draft until it has been tried.
 
-### Phase 3 (only with signing)
-Sign and notarize the macOS build in CI, add the `zip` target, and turn Phase 2 on for macOS too.
+### Phase 3 (macOS)
+Signing and notarizing in CI is done (0.6). What's left is adding the `zip` target and turning
+Phase 2 on for macOS too.
 
 ## Consequences
 - Phase 1 changes nothing about how releases are made.
