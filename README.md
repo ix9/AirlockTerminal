@@ -50,6 +50,9 @@ in your keychain, if there is one.
 - [ADR 0009: The Runsheet is always editable](docs/adr/0009-runsheet-editor.md)
 - [ADR 0010: Updates from GitHub Releases](docs/adr/0010-updates-from-github-releases.md)
 - [ADR 0011: Refined layout and the Airlock theme](docs/adr/0011-refined-layout.md)
+- [ADR 0012: Command palette with Ask AI](docs/adr/0012-command-palette.md)
+- [ADR 0013: Inline suggestions as you type](docs/adr/0013-inline-suggestions.md)
+- [ADR 0014: Folding the side pane to an icon rail](docs/adr/0014-fold-side-pane.md)
 - [Dependencies](docs/DEPENDENCIES.md)
 
 ## Licence

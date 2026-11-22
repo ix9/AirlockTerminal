@@ -68,6 +68,17 @@ the middle of the workflow without slowing it down.
 - **Installers** for Windows, macOS and Linux, on GitHub Releases. Since 0.6 the macOS build is
   signed and notarized; Windows is still unsigned.
 
+## Iteration 4
+- **Command palette** (⌘K / Ctrl+Shift+K): one search across this tab's commands, airlock history,
+  snippets and Runsheet lines, with **Ask AI** first. A local model (LM Studio and similar, default
+  `http://localhost:1235/v1`) turns a description into a command. ↵ runs it and ⌘↵ puts it in the
+  airlock; one that deletes data always goes to the airlock ([ADR 0012](adr/0012-command-palette.md)).
+- **Inline suggestions:** grey text after the cursor as you type, from this tab's and the airlock's
+  history and, if turned on, the local model. → accepts; nothing runs until Enter. Stacked or List
+  style, with toolbar toggles for each source ([ADR 0013](adr/0013-inline-suggestions.md)).
+- **Fold the side pane** into an icon rail for a full-width terminal, from the title bar button,
+  the handle on the divider or ⌘\ ([ADR 0014](adr/0014-fold-side-pane.md)).
+
 ## Out of scope (for now)
 - Using an existing browser profile.
 - Running commands without a deliberate user action, or parsing chat content beyond copy events.

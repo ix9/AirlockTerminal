@@ -194,6 +194,7 @@ function createTab(shellId, remote = null) {
   const tab = {
     id: nextTabId++, shellId, remote, host, term, fit, serializer, search, el, labelEl, envEl,
     cwd: '', env: null, envBaseline: null, awsProfiles: [], exited: false, blocks: [],
+    commands: [], // what's been run in this tab, for the command palette
   };
   tabs.push(tab);
   tabsById.set(tab.id, tab);
@@ -205,6 +206,7 @@ function createTab(shellId, remote = null) {
 
   term.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
+    if (typeof suggestionKey === 'function' && suggestionKey(tab, e)) return false; // suggest.js
     const mod = e.ctrlKey || e.metaKey;
     const isMac = window.airlock.platform === 'darwin';
     // Cmd+Shift on macOS, Ctrl+Shift elsewhere (plain Ctrl+C stays as interrupt).
@@ -246,6 +248,7 @@ function createTab(shellId, remote = null) {
   search.onDidChangeResults((results) => { if (tab === activeTab) showFindCount(results); });
   // Output moves the blocks under the mouse.
   term.onRender(() => { if (tab === activeTab && terminalMouse) showHoveredBlock(); });
+  if (typeof watchSuggestions === 'function') watchSuggestions(tab); // suggest.js
   return tab;
 }
 
@@ -272,6 +275,7 @@ function activateTab(tab) {
   window.airlock.ptyActivate(tab.id);
   showTabState();
   showView('terminal');
+  if (previous !== tab && typeof closePalette === 'function') closePalette({ focus: false }); // it searches the tab it opened in
   tab.el.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   findFollowsTab(previous);
 }
@@ -338,6 +342,8 @@ window.addEventListener('keydown', (e) => {
     : e.ctrlKey && e.shiftKey && !e.metaKey;
   let action = null;
   if (appKey && !e.altKey && e.code === 'KeyT') action = newTab;
+  else if (appKey && !e.altKey && e.code === 'KeyK') action = togglePalette; // palette.js
+  else if (appKey && !e.altKey && e.code === 'Backslash') action = () => setSideFolded(!sideFolded);
   else if (appKey && !e.altKey && e.code === 'KeyW') action = () => { if (view === 'terminal') closeTab(activeTab); };
   else if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'Tab') {
     action = () => activateTab(tabs[(tabs.indexOf(activeTab) + (e.shiftKey ? -1 : 1) + tabs.length) % tabs.length]);
@@ -603,6 +609,7 @@ function handlePromptMark(tab, data) {
       block.end = term.registerMarker(0);
       block.endX = cursorX;
       block.exitCode = Number.parseInt(arg, 10) || 0;
+      if (!block.recorded) recordCommand(tab, block, readBlock(tab, block)?.command);
     }
   }
   return true; // consumed: never shown in the terminal
@@ -611,6 +618,20 @@ function handlePromptMark(tab, data) {
 function noteBlockCommand(tab, commandB64) {
   const block = promptBlock(tab);
   try { if (block) block.command = b64(commandB64); } catch {}
+  if (block) recordCommand(tab, block, block.command);
+}
+
+// Each tab's own history, for the command palette (ADR 0012): newest last, each command once,
+// with when and where it ran. From the command line the shell sends, or else (bash 3.2) from
+// what was typed at the prompt, read once the command has finished.
+const MAX_TAB_COMMANDS = 500;
+function recordCommand(tab, block, command) {
+  const text = command?.trim();
+  if (block.recorded || !text) return;
+  block.recorded = true;
+  tab.commands = tab.commands.filter((c) => c.command !== text);
+  tab.commands.push({ command: text, at: Date.now(), cwd: tab.cwd });
+  if (tab.commands.length > MAX_TAB_COMMANDS) tab.commands.shift();
 }
 
 // Keys typed at a prompt. The first one shows where the prompt ends, and Enter where the command
@@ -1569,10 +1590,12 @@ $('compare-close').addEventListener('click', () => {
 // --- Right pane: Claude or the Runsheet ----------------------------------------------------
 
 let rightTab = ['team', 'personal'].includes(prefs.rightTab) ? 'snippets' : prefs.rightTab ?? 'claude';
-// The chat and web pages are native views above this page, so only the current one is shown.
+let sideFolded = prefs.sideFolded === true; // folded to its icon rail (ADR 0014)
+// The chat and web pages are native views above this page, so only the current one is shown,
+// and neither while the pane is folded.
 function syncNativeViews() {
-  window.airlock.setChatVisible(rightTab === 'claude');
-  window.airlock.setWebVisible(rightTab === 'web');
+  window.airlock.setChatVisible(rightTab === 'claude' && !sideFolded);
+  window.airlock.setWebVisible(rightTab === 'web' && !sideFolded);
 }
 // One Snippets tab lists Team and Personal repos together. Before, each had its own tab.
 const isSnippetTab = (tab) => tab === 'snippets';
@@ -1587,12 +1610,14 @@ function showRightTab(tab) {
   $('tab-web').classList.toggle('active', tab === 'web');
   $('tab-runsheet').classList.toggle('active', tab === 'runsheet');
   $('tab-repos').classList.toggle('active', isSnippetTab(tab));
+  for (const b of document.querySelectorAll('#side-rail .rail-btn')) b.classList.toggle('active', b.dataset.tab === (isSnippetTab(tab) ? 'snippets' : tab));
   syncNativeViews();
   // After this script has run, as the snippets section is defined further down.
   if (isSnippetTab(tab)) queueMicrotask(showTeamTab);
   if (tab === 'remotes' && typeof showRemotesTab === 'function') showRemotesTab(); // remotes.js loads later, and opens it then
 }
 function chooseRightTab(tab) {
+  if (sideFolded) setSideFolded(false); // showing something there opens the pane
   showRightTab(tab);
   saveSetting('rightTab', tab);
 }
@@ -1751,6 +1776,7 @@ function syncRunsheetLayout() {
   $('runsheet-save').disabled = !edited;
   $('runsheet-name').textContent = `${runsheetRelative}${edited ? ' •' : ''}`;
   $('tab-runsheet').textContent = edited ? 'Runsheet •' : 'Runsheet';
+  $('rail-runsheet').classList.toggle('dirty', edited);
   $('runsheet-toggle').textContent = filesOpen ? 'Files ▴' : 'Files ▾';
   $('runsheet-toggle').setAttribute('aria-expanded', String(filesOpen));
 }
@@ -2685,6 +2711,7 @@ function persistScrollback() {
     shellId: tab.shellId,
     ...(tab.remote && { remote: tab.remote }),
     data: tab.serializer.serialize({ scrollback: SCROLLBACK_LINES, excludeAltBuffer: true, excludeModes: true }),
+    commands: tab.commands.slice(-200),
   })));
 }
 setInterval(() => { if (outputChanged) persistScrollback(); }, 30000);
@@ -2718,6 +2745,10 @@ Promise.all([window.airlock.listShells(), window.airlock.loadScrollback(), allSc
   } else {
     for (const saved of savedTabs) {
       const tab = createTab(shellLabels.has(saved.shellId) ? saved.shellId : defaultShellId(), saved.remote ?? null);
+      if (Array.isArray(saved.commands)) {
+        tab.commands = saved.commands.filter((c) => typeof c?.command === 'string' && Number.isFinite(c.at))
+          .map(({ command, at, cwd }) => ({ command, at, cwd: typeof cwd === 'string' ? cwd : '' }));
+      }
       if (!activeTab) activateTab(tab);
       // Old output first, so the new shell's prompt lands below it. Remote tabs wait for Reconnect,
       // so starting the app never signs in to a server by itself.
@@ -2736,6 +2767,7 @@ Promise.all([window.airlock.listShells(), window.airlock.loadScrollback(), allSc
 
 function makeSplitter(el, onMove, onDone) {
   el.addEventListener('pointerdown', (e) => {
+    if (el.classList.contains('locked')) return; // the divider by a folded pane
     el.setPointerCapture(e.pointerId);
     el.classList.add('dragging');
     window.airlock.setChatVisible(false);
@@ -2760,11 +2792,52 @@ function setDivider(setting, cssVar, percent) {
   root.setProperty(cssVar, `${percent}%`);
 }
 
+// Dragged nearly to the window's edge, the side pane folds, and keeps the width it had.
+let foldOnDrop = false;
+let widthBeforeDrag = null;
+$('vsplit').addEventListener('pointerdown', () => { widthBeforeDrag = dragged.leftWidth ?? prefs.leftWidth ?? null; }, true);
 makeSplitter($('vsplit'), (e) => {
   const min = 200;
+  foldOnDrop = e.clientX > window.innerWidth - 90;
+  $('vsplit').classList.toggle('will-fold', foldOnDrop);
   const x = Math.min(Math.max(e.clientX, min), window.innerWidth - min);
   setDivider('leftWidth', '--left-width', (x / window.innerWidth) * 100);
-}, () => saveSetting('leftWidth', dragged.leftWidth));
+}, () => {
+  $('vsplit').classList.remove('will-fold');
+  if (foldOnDrop) {
+    foldOnDrop = false;
+    if (widthBeforeDrag) setDivider('leftWidth', '--left-width', widthBeforeDrag);
+    else { delete dragged.leftWidth; root.removeProperty('--left-width'); }
+    setSideFolded(true);
+    return;
+  }
+  saveSetting('leftWidth', dragged.leftWidth);
+});
+
+// --- Folding the side pane (ADR 0014) ----------------------------------------------------
+// The title bar button, the handle on the divider and Cmd+\ (Ctrl+Shift+\ elsewhere) fold the
+// right-hand pane into a rail of its tabs' icons, and open it again. Picking an icon opens it on
+// that tab. Folded or open is remembered.
+function setSideFolded(folded) {
+  sideFolded = folded;
+  $('app').classList.toggle('side-folded', folded);
+  $('vsplit').classList.toggle('locked', folded);
+  const label = folded ? 'Open the side pane' : 'Fold the side pane';
+  const keys = IS_MAC ? '⌘\\' : 'Ctrl+Shift+\\';
+  for (const id of ['toggle-side', 'side-handle']) {
+    $(id).title = `${label} (${keys})`;
+    $(id).setAttribute('aria-label', label);
+  }
+  $('toggle-side').classList.toggle('open', !folded);
+  syncNativeViews();
+  syncChatBounds();
+  if ((prefs.sideFolded === true) !== folded) saveSetting('sideFolded', folded);
+}
+$('toggle-side').addEventListener('click', () => setSideFolded(!sideFolded));
+$('side-handle').addEventListener('pointerdown', (e) => e.stopPropagation()); // a click, not a drag
+$('side-handle').addEventListener('click', () => setSideFolded(!sideFolded));
+for (const b of document.querySelectorAll('#side-rail .rail-btn')) b.addEventListener('click', () => chooseRightTab(b.dataset.tab));
+setSideFolded(sideFolded);
 
 makeSplitter($('hsplit'), (e) => {
   const r = $('left').getBoundingClientRect();

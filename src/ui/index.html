@@ -17,13 +17,14 @@
     <button id="new-tab" title="New terminal (Cmd+T on macOS, Ctrl+Shift+T elsewhere)" aria-label="New terminal">+</button>
     <span class="spacer"></span>
     <span id="usage"></span>
+    <button id="toggle-side" class="title-btn" aria-label="Fold the side pane"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M10 2.5v11"/><path class="fill" d="M10.5 3h3.2a.8.8 0 0 1 .8.8v8.4a.8.8 0 0 1-.8.8h-3.2z"/></svg></button>
   </header>
   <main id="app">
     <section id="left">
       <header id="toolbar">
         <select id="shell" title="Shell"></select>
         <button id="restart" class="icon labelled" title="Restart the shell">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.7-4"/><path d="M2.5 2v3.5H6"/></svg>Restart
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.7-4"/><path d="M2.5 2v3.5H6"/></svg><span>Restart</span>
         </button>
         <select id="aws" title="AWS profile: sets AWS_PROFILE in this terminal">
           <option value="">AWS profile…</option>
@@ -33,6 +34,15 @@
         </button>
         <button id="send-block" class="icon" title="Send the last command and its output to Claude" aria-label="Send last command to Claude">
           <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2.5 14.5 8 2 13.5 4 8Z"/><path d="M4 8h5"/></svg>
+        </button>
+        <button id="open-palette" class="icon" aria-label="Search commands or ask AI">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/><path d="M12.5 1.5v3M11 3h3"/></svg>
+        </button>
+        <button id="suggest-history" class="icon toggle" aria-label="History suggestions" aria-pressed="true">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h7.5a2 2 0 0 1 2 2V14H5a2 2 0 0 1-2-2z"/><path d="M3 12a2 2 0 0 1 2-2h7.5"/><path d="M7.75 4.75v2.25l1.5 1"/></svg>
+        </button>
+        <button id="suggest-ai" class="icon toggle ai" aria-label="AI suggestions" aria-pressed="false">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5c.4 3.6 1.9 5.1 5.5 5.5-3.6.4-5.1 1.9-5.5 5.5C7.6 8.9 6.1 7.4 2.5 7 6.1 6.6 7.6 5.1 8 1.5Z"/><path d="M13 11.5v3M11.5 13h3"/></svg>
         </button>
         <span id="remote-chip" hidden><span class="dot"></span><span id="remote-address" class="mono"></span><span id="remote-how"></span></span>
         <span id="remote-key" hidden title="ssh is using 1Password's SSH agent: keys stay in 1Password, and each use is approved there">
@@ -55,7 +65,7 @@
           <button id="find-next" title="Next match (Enter)" aria-label="Next match">↓</button>
         </div>
         <button id="tab-scratchpad" class="view-toggle icon labelled" title="Show or hide the scratchpad">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h7l3 3v8H3z"/><path d="M5.5 8.5h5M5.5 11h3"/></svg>Scratchpad
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 2.5h7l3 3v8H3z"/><path d="M5.5 8.5h5M5.5 11h3"/></svg><span>Scratchpad</span>
         </button>
         <button id="tab-settings" class="view-toggle icon" title="Show or hide settings" aria-label="Settings">
           <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></svg>
@@ -168,6 +178,45 @@
               being one, and a saved password stays on this machine.</p>
           </section>
           <section>
+            <h2>Ask AI</h2>
+            <label class="row">Model server <input id="setting-ai-url" class="mono wide" spellcheck="false" placeholder="http://localhost:1235/v1"></label>
+            <label class="row">Model <input id="setting-ai-model" class="mono wide" list="setting-ai-models" spellcheck="false" placeholder="Blank: the first chat model loaded"></label>
+            <datalist id="setting-ai-models"></datalist>
+            <div class="row"><button id="setting-ai-test">Test</button> <span id="setting-ai-state"></span></div>
+            <p class="hint">The command palette (⌘K on macOS, Ctrl+Shift+K elsewhere) asks this server to write commands. Any
+              OpenAI-style API works: LM Studio, Ollama, llama.cpp. It's sent your question, the shell, the operating system and
+              the terminal's folder, never what's on screen. Picking a command in the palette runs it, and ⌘↵ (Ctrl+Enter) puts it
+              in the airlock instead. A command that deletes or overwrites data never runs from the palette: it always goes to
+              the airlock for you to check.</p>
+          </section>
+          <section>
+            <h2>Inline suggestions</h2>
+            <label class="row"><input id="setting-suggest-history" type="checkbox" class="switch"> History suggestions</label>
+            <p class="hint">Grey text after the cursor as you type: the rest of a command from this tab, then from the airlock's
+              history. <b>→</b> accepts it. Only what's on the line runs, when you press Enter. Also the book button on the toolbar.</p>
+            <label class="row"><input id="setting-suggest-ai" type="checkbox" class="switch"> AI suggestions</label>
+            <p class="hint">The model in Ask AI finishes the line when you pause typing. It's sent the line, the shell, the
+              operating system, the folder and this tab's last few commands. It never suggests anything for a command that
+              deletes things. Also the spark button on the toolbar.</p>
+            <div class="suggest-styles" role="radiogroup" aria-label="Style">
+              <label class="suggest-style"><input type="radio" name="suggest-style" value="stacked">
+                <span><b>Stacked</b><small>History after the cursor, the model's suggestion on a faint line underneath.
+                  <b>→</b> and <b>⇧→</b> accept them.</small></span></label>
+              <label class="suggest-style"><input type="radio" name="suggest-style" value="list">
+                <span><b>List</b><small>A small list above the line, history then AI. <b>↑↓</b> choose, <b>→</b> accepts,
+                  <b>esc</b> hides it.</small></span></label>
+            </div>
+            <p class="hint">Ctrl+Space opens the list in either style.</p>
+            <label class="row">Wait before asking the model
+              <select id="setting-suggest-delay">
+                <option value="150">150 ms</option>
+                <option value="300">300 ms</option>
+                <option value="500">500 ms</option>
+                <option value="1000">1 second</option>
+              </select>
+            </label>
+          </section>
+          <section>
             <h2>Updates</h2>
             <label class="row"><input id="setting-check-updates" type="checkbox"> Check GitHub for new versions</label>
             <div class="row"><button id="setting-update-check">Check now</button> <span id="setting-update-state"></span></div>
@@ -182,6 +231,21 @@
             <p class="hint">Holds settings, history, the scratchpad and saved terminal output.</p>
           </section>
         </div>
+        <!-- The command palette (ADR 0012): over the top of the terminal, leaving its prompt in view. -->
+        <div id="palette" hidden role="dialog" aria-label="Search commands or ask AI">
+          <div class="pal-query">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+            <input id="palette-input" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="Search your commands, or describe one for AI to write" aria-label="Search or ask">
+            <span class="pal-chip">esc</span>
+          </div>
+          <div id="palette-body" role="listbox"></div>
+          <div id="palette-foot"></div>
+        </div>
+        <!-- Inline suggestions (ADR 0013): drawn over the terminal's cells, never typed until accepted. -->
+        <div id="suggest-ghost" hidden aria-hidden="true"></div>
+        <div id="suggest-alt" hidden aria-hidden="true"></div>
+        <div id="suggest-list" hidden role="listbox" aria-label="Suggestions"></div>
         <div id="toasts"></div>
       </div>
       <div id="hsplit" class="splitter"></div>
@@ -230,8 +294,18 @@
         </div>
       </div>
     </section>
-    <div id="vsplit" class="splitter"></div>
+    <div id="vsplit" class="splitter">
+      <button id="side-handle" aria-label="Fold the side pane"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2 6.5 5 3.5 8"/></svg></button>
+    </div>
     <section id="right">
+    <!-- The side pane folded into icons (ADR 0014). Each opens the pane on that tab. -->
+    <nav id="side-rail" aria-label="Side pane">
+      <button class="rail-btn" data-tab="claude" title="Claude" aria-label="Claude"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>
+      <button class="rail-btn" data-tab="web" title="Web" aria-label="Web"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg></button>
+      <button class="rail-btn" data-tab="runsheet" title="Runsheet" aria-label="Runsheet" id="rail-runsheet"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="14 3 14 9 20 9"/></svg></button>
+      <button class="rail-btn" data-tab="snippets" title="Snippets" aria-label="Snippets"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 21 12 16 5 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg></button>
+      <button class="rail-btn" data-tab="remotes" title="Remotes" aria-label="Remotes"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/></svg></button>
+    </nav>
       <nav id="right-tabs" class="tabs">
         <button id="tab-claude" class="tab">Claude</button>
         <button id="tab-web" class="tab" title="Browse any site and copy commands from it">Web</button>
@@ -446,5 +520,7 @@
   <script src="diff.js"></script>
   <script src="renderer.js"></script>
   <script src="remotes.js"></script>
+  <script src="palette.js"></script>
+  <script src="suggest.js"></script>
 </body>
 </html>
