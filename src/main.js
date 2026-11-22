@@ -65,6 +65,7 @@ const SETTING_RULES = {
   runsheetFontSize: (v) => Number.isFinite(v) && v >= 8 && v <= 32,
   lastShell: (v) => typeof v === 'string',
   leftWidth: isPercent,
+  sideFolded: (v) => typeof v === 'boolean', // ADR 0014
   airlockHeight: isPercent,
   scratchLeft: isPercent,
   saveScrollback: (v) => typeof v === 'boolean',
@@ -79,6 +80,14 @@ const SETTING_RULES = {
   showSshConfigHosts: (v) => typeof v === 'boolean',
   sshAcceptNewHostKeys: (v) => typeof v === 'boolean',
   lastRemoteSource: (v) => v === 'local' || validRepoId(v),
+  // Ask AI in the command palette (ADR 0012): an OpenAI-style server, and optionally which model.
+  aiBaseUrl: (v) => typeof v === 'string' && v.length <= 300 && /^https?:\/\/[^\s"'<>]+$/i.test(v),
+  aiModel: (v) => typeof v === 'string' && v.length <= 200 && !/[\r\n]/.test(v),
+  // Inline suggestions as you type (ADR 0013).
+  suggestHistory: (v) => typeof v === 'boolean',
+  suggestAI: (v) => typeof v === 'boolean',
+  suggestStyle: (v) => v === 'stacked' || v === 'list',
+  suggestDelay: (v) => Number.isInteger(v) && v >= 100 && v <= 3000,
   checkUpdates: (v) => typeof v === 'boolean', // ADR 0010
 };
 
@@ -1755,6 +1764,235 @@ app.on('second-instance', () => {
   if (win.isMinimized()) win.restore();
   win.show();
   win.focus();
+});
+
+// --- Command palette: Runsheet lines and the AI command builder (ADR 0012) ----------------------
+
+// Lines worth offering as commands, from every file in the Runsheet folder: in Markdown, only what's
+// inside code blocks; elsewhere, every line that isn't blank or a comment. Cached by modification
+// time, so reopening the palette is cheap.
+const PALETTE_MAX_LINES = 20000;
+const runsheetLineCache = new Map(); // path → { mtimeMs, size, lines }
+function commandLines(file, text) {
+  const lines = [];
+  const markdown = /\.(md|markdown)$/i.test(file);
+  let inFence = false;
+  text.replace(/\r\n?/g, '\n').split('\n').forEach((raw, i) => {
+    const line = raw.trim();
+    if (markdown && /^(```|~~~)/.test(line)) { inFence = !inFence; return; }
+    if (markdown && !inFence) return;
+    if (!line || line.length > 400 || /^(#|\/\/|--|;|REM\b)/i.test(line)) return;
+    lines.push({ line: i + 1, text: line });
+  });
+  return lines;
+}
+ipcMain.handle('runsheet:command-lines', async (e) => {
+  const folder = settings.runsheetFolder;
+  if (!fromUi(e) || !folder) return [];
+  let files = [];
+  try { files = await listRunsheets(folder); } catch { return []; }
+  const found = [];
+  for (const relative of files) {
+    const file = path.join(folder, ...relative.split('/'));
+    try {
+      const stat = await fs.promises.stat(file);
+      if (stat.size > RUNSHEET_MAX_BYTES) continue;
+      let cached = runsheetLineCache.get(file);
+      if (!cached || cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
+        cached = { mtimeMs: stat.mtimeMs, size: stat.size, lines: commandLines(file, decodeText(await fs.promises.readFile(file))) };
+        runsheetLineCache.set(file, cached);
+      }
+      for (const l of cached.lines) found.push({ file: relative, ...l });
+    } catch {} // unreadable or gone: skip it
+    if (found.length >= PALETTE_MAX_LINES) break;
+  }
+  return found.slice(0, PALETTE_MAX_LINES);
+});
+
+// Ask AI: a local model behind an OpenAI-style API (LM Studio, Ollama, llama.cpp and others).
+// What's sent: the question, the shell, the OS and the folder. Never terminal output.
+const AI_DEFAULT_URL = 'http://localhost:1235/v1';
+const aiBaseUrl = () => (settings.aiBaseUrl || AI_DEFAULT_URL).replace(/\/+$/, '');
+
+async function aiModels() {
+  const res = await net.fetch(`${aiBaseUrl()}/models`, { signal: AbortSignal.timeout(5000) });
+  if (!res.ok) throw new Error(`the model server answered ${res.status}`);
+  const body = await res.json();
+  return (Array.isArray(body?.data) ? body.data : []).map((m) => String(m?.id ?? '')).filter(Boolean);
+}
+
+// The model in Settings, or else the first chat model the server offers (an instruct model if
+// there is one: base models tend to keep writing after the answer).
+async function pickModel() {
+  if (settings.aiModel) return settings.aiModel;
+  const chat = (await aiModels()).filter((id) => !/embed/i.test(id));
+  const model = chat.find((id) => /instruct|chat/i.test(id)) ?? chat[0];
+  if (!model) throw new Error('the model server has no chat model loaded');
+  return model;
+}
+
+// The first complete {...} in the reply, ignoring anything around it. Small models also write
+// escapes JSON doesn't allow, like \; in a find command, so those are kept as plain backslashes.
+function firstJsonObject(text) {
+  const start = text.indexOf('{');
+  if (start < 0) return null;
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === '\\') i++;
+      else if (ch === '"') inString = false;
+    } else if (ch === '"') inString = true;
+    else if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) {
+      const raw = text.slice(start, i + 1).replace(/\\(?!["\\/bfnrtu])/g, '\\\\');
+      try { return JSON.parse(raw); } catch { return null; }
+    }
+  }
+  return null;
+}
+
+// Not left to the model: the app checks every command itself, and only ever raises the risk.
+const RISK_ORDER = ['read-only', 'changes', 'deletes'];
+const DELETES = [
+  /(^|[\s;&|(])(sudo\s+)?(rm|rmdir|shred|unlink|srm)\s/, /\s-delete\b/, /(^|[\s;&|])dd\s/, /\bmkfs\b/, /\btruncate\s/,
+  /\bRemove-Item\b/i, /\bClear-Content\b/i, /\bFormat-Volume\b/i, /(^|[\s;&|])(del|erase|rd)\s/i,
+  /\bdrop\s+(table|database|schema)\b/i, /\bdelete\s+from\b/i,
+  /\bgit\s+(reset\s+--hard|clean\s+-\w*f|push\b.*(--force|-f\b))/, /\bkubectl\s+delete\b/, /\bdocker\s+(rm|rmi|volume\s+rm|system\s+prune)\b/,
+  /(^|[^>&0-9])>(?![>&])\s*[^\s&|]/, // > file: replaces the file's contents
+];
+const CHANGES = [
+  /(^|[\s;&|])(sudo|chmod|chown|chgrp|mv|cp|ln|mkdir|touch|kill|pkill|killall|tee|install|reboot|shutdown)\s/,
+  /\bsed\s+-i\b/, />>/, /\bsystemctl\s+(start|stop|restart|reload|enable|disable)\b/, /\b(apt|apt-get|yum|dnf|brew|npm|pip|pip3)\s+(install|remove|uninstall|upgrade|update)\b/,
+  /\bgit\s+(commit|push|pull|merge|rebase|checkout|switch|stash)\b/, /\bkubectl\s+(apply|scale|rollout|edit|patch|set)\b/,
+  /\b(Set|New|Stop|Start|Restart|Rename|Move|Copy)-[A-Z]/,
+];
+function assessRisk(command, claimed) {
+  const own = DELETES.some((r) => r.test(command)) ? 'deletes' : CHANGES.some((r) => r.test(command)) ? 'changes' : 'read-only';
+  const theirs = RISK_ORDER.includes(claimed) ? claimed : 'read-only';
+  return RISK_ORDER[Math.max(RISK_ORDER.indexOf(own), RISK_ORDER.indexOf(theirs))];
+}
+
+function aiMessages({ question, shell, os, cwd }) {
+  const powershell = /powershell|pwsh/i.test(shell);
+  const example = powershell
+    ? { command: 'Get-ChildItem -Recurse | Measure-Object -Property Length -Sum', explanation: 'Adds up the size of every file under the current folder.', risk: 'read-only', alternatives: [{ command: 'Get-ChildItem | Sort-Object Length -Descending', note: 'largest files first' }] }
+    : { command: 'du -sh .', explanation: 'Shows the total size of the current folder.', risk: 'read-only', alternatives: [{ command: 'du -sh *', note: 'each item separately' }] };
+  return [
+    {
+      role: 'system',
+      content: `You turn a request into one command for ${shell} on ${os}.${cwd ? ` The current folder is ${cwd}.` : ''} `
+        + 'Reply with only a JSON object, no prose and no code fences, shaped like {"command": "...", "explanation": "one short sentence", '
+        + '"risk": "read-only", "alternatives": [{"command": "...", "note": "a few words"}]}. Give at most 2 alternatives. '
+        + 'risk is "deletes" if the command removes or overwrites data, "changes" if it modifies files, settings or processes, otherwise "read-only".',
+    },
+    { role: 'user', content: 'show disk usage of this folder' },
+    { role: 'assistant', content: JSON.stringify(example) },
+    { role: 'user', content: question },
+  ];
+}
+
+const aiText = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+ipcMain.handle('ai:suggest', async (e, req) => {
+  if (!fromUi(e) || typeof req?.question !== 'string' || !req.question.trim()) return null;
+  const context = { question: req.question.slice(0, 1000), shell: aiText(req.shell, 60) || 'bash', os: aiText(req.os, 60) || 'Linux', cwd: aiText(req.cwd, 500) };
+  const started = Date.now();
+  try {
+    const model = await pickModel();
+    const res = await net.fetch(`${aiBaseUrl()}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model, temperature: 0.1, max_tokens: 400, stream: false,
+        stop: ['<|file_sep|>', '<|fim_prefix|>', '<|endoftext|>', '<|im_end|>'],
+        messages: aiMessages(context),
+      }),
+      signal: AbortSignal.timeout(90000),
+    });
+    if (!res.ok) throw new Error(`the model server answered ${res.status}`);
+    const body = await res.json();
+    const reply = String(body?.choices?.[0]?.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '');
+    const json = firstJsonObject(reply);
+    // No JSON: the first code block, or else the first line, is the best guess.
+    const command = aiText(json?.command, 4000) || aiText(reply.match(/```[\w-]*\n([\s\S]*?)```/)?.[1] ?? reply.split('\n').find((l) => l.trim()) ?? '', 4000);
+    if (!command) throw new Error('the model didn\'t suggest a command');
+    const alternatives = (Array.isArray(json?.alternatives) ? json.alternatives : [])
+      .map((a) => ({ command: aiText(a?.command, 4000), note: aiText(a?.note, 120) }))
+      .filter((a) => a.command && a.command !== command).slice(0, 3)
+      .map((a) => ({ ...a, risk: assessRisk(a.command) }));
+    return {
+      command, explanation: aiText(json?.explanation, 400), risk: assessRisk(command, json?.risk), alternatives,
+      model, ms: Date.now() - started,
+    };
+  } catch (err) {
+    const message = err.name === 'TimeoutError' ? 'the model took too long to answer'
+      : /fetch failed|ECONNREFUSED|ERR_CONNECTION_REFUSED/i.test(err.message) ? `nothing is answering at ${aiBaseUrl()}` : err.message;
+    return { error: message };
+  }
+});
+// Inline AI suggestions (ADR 0013): the model finishes the line being typed. Only the rest of the
+// line comes back, on one line with no control characters, so accepting it can only ever type
+// text: never press Enter. Nothing is offered for a line that deletes things, and no completion
+// that would make it delete things.
+ipcMain.handle('ai:complete', async (e, req) => {
+  if (!fromUi(e) || typeof req?.line !== 'string') return null;
+  const line = req.line.slice(0, 1000);
+  if (!line.trim() || assessRisk(line) === 'deletes') return { completions: [] };
+  const recent = (Array.isArray(req.recent) ? req.recent : []).filter((c) => typeof c === 'string').slice(-5).map((c) => c.slice(0, 300));
+  const shell = aiText(req.shell, 60) || 'bash';
+  const os = aiText(req.os, 60) || 'Linux';
+  const cwd = aiText(req.cwd, 500);
+  try {
+    const model = await pickModel();
+    const res = await net.fetch(`${aiBaseUrl()}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model, temperature: 0.2, max_tokens: 120, stream: false,
+        stop: ['<|file_sep|>', '<|fim_prefix|>', '<|endoftext|>', '<|im_end|>'],
+        messages: [
+          {
+            role: 'system',
+            content: `You complete ${shell} commands on ${os}.${cwd ? ` The current folder is ${cwd}.` : ''}`
+              + (recent.length ? ` Recent commands:\n${recent.join('\n')}\n` : ' ')
+              + 'Given the start of a command line, reply with up to 2 likely complete command lines, one per line, '
+              + 'each beginning with exactly the text given. No explanations, no numbering, no code fences.',
+          },
+          { role: 'user', content: line },
+        ],
+      }),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) return { completions: [], error: `the model server answered ${res.status}` };
+    const body = await res.json();
+    const reply = String(body?.choices?.[0]?.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '');
+    const seen = new Set();
+    const completions = [];
+    for (const raw of reply.split('\n')) {
+      const candidate = raw.replace(/^\s*(?:[$❯>]\s+|`+)/, '').replace(/`+\s*$/, '');
+      if (!candidate.startsWith(line) || candidate.length <= line.length) continue;
+      const rest = candidate.slice(line.length).replace(/[\x00-\x1f\x7f]/g, '').slice(0, 300).trimEnd();
+      if (!rest.trim() || seen.has(rest)) continue;
+      const risk = assessRisk(line + rest);
+      if (risk === 'deletes') continue;
+      seen.add(rest);
+      completions.push({ rest, risk });
+      if (completions.length === 2) break;
+    }
+    return { completions, model };
+  } catch (err) {
+    return { completions: [], error: err.message };
+  }
+});
+ipcMain.handle('ai:risk', (e, command) => (fromUi(e) && typeof command === 'string' ? assessRisk(command) : 'read-only'));
+ipcMain.handle('ai:models', async (e) => {
+  if (!fromUi(e)) return null;
+  try {
+    return { url: aiBaseUrl(), models: (await aiModels()).filter((id) => !/embed/i.test(id)), chosen: await pickModel() };
+  } catch (err) {
+    return { url: aiBaseUrl(), error: /fetch failed|ECONNREFUSED|ERR_CONNECTION_REFUSED/i.test(err.message) ? `nothing is answering at ${aiBaseUrl()}` : err.message };
+  }
 });
 
 // --- Updates (ADR 0010) -------------------------------------------------------------------------

@@ -334,6 +334,27 @@ body {
 #toolbar button, #toolbar select { height: 26px; }
 #toolbar button.icon { width: 30px; }
 #toolbar button.icon.labelled { width: auto; gap: 6px; padding: 0 10px 0 8px; } /* an icon with its name */
+/* On a narrow pane the names go before anything wraps: a second row would resize the terminal. */
+#toolbar { container-type: inline-size; }
+@container (max-width: 820px) {
+  #toolbar #shell, #toolbar #aws { max-width: 120px; }
+  #toolbar #find { flex-basis: 150px; }
+}
+@container (max-width: 730px) {
+  #toolbar button.icon.labelled { width: 30px; padding: 0; }
+  #toolbar button.icon.labelled span { display: none; }
+}
+@container (max-width: 660px) {
+  #toolbar #shell, #toolbar #aws { max-width: 110px; }
+  #toolbar #find { flex-basis: 90px; min-width: 90px; }
+  #toolbar #find-case, #toolbar #find-regex { display: none; }
+}
+/* Very narrow: Find keeps its box (Enter and Shift+Enter still step through matches). */
+@container (max-width: 520px) {
+  #toolbar #shell, #toolbar #aws { max-width: 90px; }
+  #toolbar #find { flex-basis: 80px; min-width: 80px; }
+  #toolbar #find-prev, #toolbar #find-next { display: none; }
+}
 /* Pickers size to their longest option; capped so the toolbar stays on one row. */
 #shell, #aws { max-width: 200px; }
 
@@ -351,7 +372,7 @@ body {
 /* Find in the terminal: always in the toolbar, at its right-hand end. It shrinks before the
    toolbar wraps, since a second toolbar row would resize the terminal. */
 /* Wrapping is decided on the 200px basis, so Find gives up its extra width before anything wraps. */
-#find { display: flex; align-items: center; gap: 2px; flex: 1 1 200px; min-width: 150px; max-width: 300px; margin-left: auto; }
+#find { display: flex; align-items: center; gap: 2px; flex: 1 1 160px; min-width: 150px; max-width: 300px; margin-left: auto; }
 #find-input { flex: 1 1 auto; min-width: 60px; height: 26px; }
 #find-input.invalid { border-color: var(--error); }
 #find-count { padding: 0 4px; color: var(--muted); font-size: 12px; white-space: nowrap; }
@@ -1023,3 +1044,167 @@ button kbd { margin-left: 6px; font: inherit; font-size: 11px; opacity: 0.65; }
 .menu button kbd { margin-left: auto; padding-left: 20px; }
 .menu button:hover, .menu button:focus-visible { background: var(--hover); outline: none; }
 .menu hr { margin: 4px 2px; border: 0; border-top: 1px solid var(--border); }
+
+/* --- Command palette (ADR 0012) ----------------------------------------------------------- */
+/* Over the top of the terminal. Its height is capped so the prompt and the last few lines of
+   output always stay in view below it. */
+#palette {
+  position: absolute; top: 10px; left: 16px; right: 16px; z-index: 5;
+  display: flex; flex-direction: column; max-height: calc(100% - 110px); min-height: 0;
+  background: var(--input); border: 1px solid var(--edge); border-radius: 12px; box-shadow: 0 24px 60px var(--shadow);
+  overflow: hidden;
+}
+#palette[hidden] { display: none; }
+#terminal-wrap.palette-open #block-band, #terminal-wrap.palette-open #block-actions { display: none; }
+.pal-query { display: flex; flex: none; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+.pal-query svg { width: 16px; height: 16px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.4; stroke-linecap: round; }
+#palette-input { flex: 1; height: 26px; padding: 0; border: none; background: none; font-size: 14px; }
+#palette-input:focus { border: none; }
+#palette-body { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: 4px; }
+#palette-foot { display: flex; flex: none; flex-wrap: wrap; gap: 4px 14px; padding: 7px 12px; border-top: 1px solid var(--border); color: var(--dim); font-size: 11px; }
+#palette-foot b { color: var(--muted); font-weight: 500; }
+#palette h5 { margin: 0; padding: 9px 12px 3px; color: var(--dim); font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+#palette h5 small { font-weight: 400; letter-spacing: 0; text-transform: none; }
+.pal-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 5px 12px; cursor: pointer; }
+.pal-row.on { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.pal-row mark { background: none; color: var(--accent); font-weight: 600; }
+.pal-cmd { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 12.5px "Cascadia Mono", Menlo, Consolas, monospace; }
+.pal-cmd.dim { color: var(--muted); }
+.pal-meta { flex: none; display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--dim); font-size: 11px; white-space: nowrap; }
+.pal-empty { padding: 6px 12px; color: var(--dim); font-size: 12px; }
+.pal-error { margin-left: auto; color: var(--error); font-size: 11.5px; }
+.pal-spark { display: inline-grid; flex: none; place-items: center; width: 22px; height: 22px; border-radius: 7px; color: var(--spark);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 25%, transparent), color-mix(in srgb, var(--spark) 22%, transparent)); }
+.pal-ask { flex: none; font-weight: 600; }
+.pal-question { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--muted); }
+.pal-chip { display: inline-flex; flex: none; align-items: center; height: 20px; padding: 0 8px; border-radius: 999px; background: var(--surface); color: var(--muted); font-size: 11px; white-space: nowrap; }
+.pal-chip[data-risk="read-only"] { background: color-mix(in srgb, var(--team-hover) 16%, transparent); color: var(--team-hover); }
+.pal-chip[data-risk="changes"] { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.pal-chip[data-risk="deletes"] { background: color-mix(in srgb, var(--error) 16%, transparent); color: var(--error); }
+.pal-spinner { width: 10px; height: 10px; border: 2px solid var(--edge); border-top-color: var(--accent); border-radius: 50%; animation: pal-spin 0.8s linear infinite; }
+@keyframes pal-spin { to { transform: rotate(360deg); } }
+
+/* The model's suggestion: an editable command, why, and what to do with it. */
+.pal-ai { margin: 8px 10px 4px; overflow: hidden; background: var(--surface); border: 1px solid var(--edge); border-radius: 10px; }
+.pal-ai.bad { border-color: color-mix(in srgb, var(--error) 55%, transparent); }
+.pal-ai-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 0; color: var(--muted); font-size: 11.5px; }
+.pal-ai-head .spacer, .pal-ai-acts .spacer { flex: 1; }
+.pal-ai-command {
+  display: block; width: calc(100% - 20px); margin: 8px 10px; padding: 8px 10px; resize: none;
+  background: var(--term-bg); color: var(--text); border: 1px solid var(--edge); border-radius: 8px;
+  font: 13.5px/20px "Cascadia Mono", Menlo, Consolas, monospace; white-space: pre; overflow-x: auto; outline: none;
+}
+.pal-ai-command:focus { border-color: var(--focus); }
+.pal-ai-why { padding: 0 12px 8px; color: var(--muted); line-height: 1.45; }
+.pal-ai-why[hidden], .pal-ai-warn[hidden] { display: none; }
+.pal-ai-warn { padding: 7px 12px; border-top: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
+  background: color-mix(in srgb, var(--error) 8%, transparent); color: var(--error); line-height: 1.4; }
+.pal-ai-acts { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-top: 1px solid var(--border); }
+#settings input.wide { width: 320px; }
+
+/* --- Inline suggestions (ADR 0013) --------------------------------------------------------- */
+/* Laid over the terminal's cells in its own font; renderer-independent, so they never reach the shell. */
+#suggest-ghost, #suggest-alt {
+  position: absolute; z-index: 3; display: flex; align-items: center;
+  white-space: pre; overflow: hidden; pointer-events: none;
+}
+#suggest-ghost[hidden], #suggest-alt[hidden], #suggest-list[hidden],
+#terminal-wrap.overlay-open #suggest-ghost, #terminal-wrap.overlay-open #suggest-alt, #terminal-wrap.overlay-open #suggest-list,
+#terminal-wrap.palette-open #suggest-ghost, #terminal-wrap.palette-open #suggest-alt, #terminal-wrap.palette-open #suggest-list { display: none; }
+#suggest-ghost .sg-text, #suggest-alt .sg-text { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--dim); }
+#suggest-ghost.ai .sg-text, #suggest-alt .sg-text {
+  color: color-mix(in srgb, var(--muted) 75%, var(--spark));
+  text-decoration: underline dotted color-mix(in srgb, var(--spark) 45%, transparent); text-underline-offset: 3px;
+}
+#suggest-alt { background: var(--term-bg); }
+.sg-hint {
+  display: inline-flex; flex: none; align-items: center; gap: 4px; margin-left: 10px;
+  color: var(--dim); font: 10.5px system-ui, -apple-system, sans-serif; letter-spacing: 0;
+}
+.sg-hint kbd { padding: 0 4px; border-radius: 3px; background: var(--input); color: var(--muted); font: inherit; line-height: 15px; }
+.sg-risk { padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+#suggest-list {
+  position: absolute; z-index: 4; overflow: hidden;
+  background: var(--input); border: 1px solid var(--edge); border-radius: 10px; box-shadow: 0 16px 40px var(--shadow);
+}
+#suggest-list h6 { margin: 0; padding: 6px 10px 2px; color: var(--dim); font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+#suggest-list h6.ai { color: var(--spark); }
+.sg-row { display: flex; align-items: center; gap: 10px; padding: 4px 10px; cursor: pointer; }
+.sg-row.on { background: color-mix(in srgb, var(--accent) 14%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.sg-cmd { min-width: 0; overflow: hidden; white-space: pre; text-overflow: ellipsis; font: 12.5px "Cascadia Mono", Menlo, Consolas, monospace; }
+.sg-cmd i { font-style: normal; color: var(--dim); }
+.sg-meta { flex: none; margin-left: auto; color: var(--dim); font-size: 11px; white-space: nowrap; }
+.sg-foot { padding: 5px 10px; border-top: 1px solid var(--border); color: var(--dim); font-size: 11px; }
+
+/* The toolbar toggles: lit when on, dimmed and struck through when off. */
+#toolbar button.toggle { position: relative; color: var(--dim); }
+#toolbar button.toggle svg { stroke-width: 1.4; }
+#toolbar button.toggle:not(.on)::after {
+  content: ""; position: absolute; left: 8px; right: 8px; top: 50%; height: 1.5px; background: var(--dim); transform: rotate(-35deg);
+}
+#toolbar button.toggle:not(.on) svg { opacity: 0.55; }
+#toolbar button.toggle.on { color: var(--text); background: color-mix(in srgb, var(--accent) 14%, var(--input)); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+#toolbar button.toggle.ai.on { color: var(--spark); background: color-mix(in srgb, var(--spark) 12%, var(--input)); border-color: color-mix(in srgb, var(--spark) 40%, transparent); }
+
+/* Settings: switches, and the two styles */
+#settings input.switch {
+  appearance: none; position: relative; flex: none; width: 32px; height: 18px; margin: 0; border-radius: 999px;
+  background: var(--hover); cursor: pointer; transition: background 0.15s;
+}
+#settings input.switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform 0.15s;
+}
+#settings input.switch:checked { background: var(--accent); }
+#settings input.switch:checked::after { transform: translateX(14px); }
+.suggest-styles { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0 4px; }
+.suggest-style { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--edge); border-radius: 9px; cursor: pointer; }
+.suggest-style:has(input:checked) { border-color: var(--focus); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.suggest-style input { height: auto; margin: 2px 0 0; }
+.suggest-style span { display: flex; flex-direction: column; gap: 2px; }
+.suggest-style small { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+
+/* --- Folding the side pane (ADR 0014) ------------------------------------------------------ */
+#app.side-folded { grid-template-columns: minmax(0, 1fr) 4px 48px; }
+#app.side-folded #right { grid-template-rows: minmax(0, 1fr); }
+#app.side-folded #right-tabs, #app.side-folded #right-body { display: none; }
+#side-rail { display: none; }
+#app.side-folded #side-rail {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 0;
+  background: color-mix(in srgb, var(--term-bg) 70%, var(--panel)); animation: rail-in 0.18s ease-out;
+}
+@keyframes rail-in { from { opacity: 0; transform: translateX(8px); } }
+.rail-btn {
+  position: relative; display: grid; place-items: center; width: 34px; height: 34px; padding: 0;
+  background: none; border: none; border-radius: 9px; color: var(--muted);
+}
+.rail-btn:hover { background: var(--input); color: var(--text); }
+.rail-btn.active { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.rail-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.rail-btn.dirty::after { content: ""; position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--spark); box-shadow: 0 0 0 2px var(--panel); }
+
+/* The handle: a pill on the divider, › open and ‹ folded. It stays inside the 8px gap before the
+   chat's native view, which would otherwise cover it. */
+#vsplit { position: relative; z-index: 2; }
+#vsplit.locked { cursor: default; }
+#vsplit.locked:hover { background: linear-gradient(var(--border), var(--border)) center / 1px 100% no-repeat; }
+#vsplit.will-fold, #vsplit.will-fold:hover { background: var(--spark); }
+#side-handle {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  display: grid; place-items: center; width: 14px; height: 44px; padding: 0;
+  background: var(--input); border: 1px solid var(--edge); border-radius: 999px; box-shadow: 0 4px 12px var(--shadow);
+  color: var(--muted); cursor: pointer; transition: width 0.15s, height 0.15s, color 0.15s, border-color 0.15s;
+}
+#side-handle:hover { width: 16px; height: 56px; color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+#side-handle svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.2s; }
+#app.side-folded #side-handle svg { transform: rotate(180deg); }
+
+/* The title bar button: right half filled while the pane is open. */
+#toggle-side {
+  flex: none; display: grid; place-items: center; width: 30px; height: 28px; margin-left: 6px; padding: 0;
+  background: none; border: none; border-radius: 7px; color: var(--muted);
+}
+#toggle-side:hover { background: var(--hover); color: var(--text); }
+#toggle-side.open { color: var(--accent); }
+#toggle-side svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; }
+#toggle-side .fill { fill: currentColor; stroke: none; opacity: 0; }
+#toggle-side.open .fill { opacity: 0.55; }
