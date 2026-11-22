@@ -295,6 +295,19 @@ function createWindow() {
     if (/^https?:/.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
+  // Only what the chat uses: the microphone for voice mode (claude.ai only), copying, fullscreen
+  // and the storage sign-in needs. Not the camera, location, notifications or reading the clipboard,
+  // which a page could otherwise get silently: with no handler, Electron grants everything.
+  const chatSession = chat.webContents.session;
+  const CHAT_PERMISSIONS = new Set(['clipboard-sanitized-write', 'fullscreen', 'storage-access', 'top-level-storage-access', 'persistent-storage']);
+  const fromClaude = (url) => /^https:\/\/claude\.ai(\/|$)/.test(url ?? '');
+  chatSession.setPermissionRequestHandler((_wc, permission, callback, details) => {
+    const microphone = permission === 'media' && details?.mediaTypes?.length > 0
+      && details.mediaTypes.every((t) => t === 'audio') && fromClaude(details.requestingUrl);
+    callback(CHAT_PERMISSIONS.has(permission) || microphone);
+  });
+  chatSession.setPermissionCheckHandler((_wc, permission, origin, details) => CHAT_PERMISSIONS.has(permission)
+    || (permission === 'media' && details?.mediaType !== 'video' && fromClaude(origin)));
   chatGesture = trackCopyGestures(chat.webContents);
   chat.setBorderRadius(10); // its placeholder is a rounded card
   win.contentView.addChildView(chat);

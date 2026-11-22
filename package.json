@@ -1,6 +1,6 @@
 {
   "name": "airlock-terminal",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Chat-to-terminal airlock: a web chat and a real terminal in one window, with a scratchpad between them.",
   "main": "src/main.js",
   "license": "MIT",
@@ -61,7 +61,22 @@
       "icon": "build/icon.icns",
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "notarize": true
+      "notarize": true,
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "Airlock Terminal runs your shell. Commands you run in it, such as ping, ssh and curl, may need to reach devices on your local network.",
+        "NSMicrophoneUsageDescription": "For voice mode in the Claude chat, and for commands you run in the terminal that record audio.",
+        "NSAudioCaptureUsageDescription": "For commands you run in the terminal that record audio.",
+        "NSCameraUsageDescription": "For commands you run in the terminal that use the camera.",
+        "NSAppleEventsUsageDescription": "Commands and scripts you run in the terminal, such as osascript, may control other apps.",
+        "NSDesktopFolderUsageDescription": "Commands you run in the terminal may read or change files on your Desktop.",
+        "NSDocumentsFolderUsageDescription": "Commands you run in the terminal may read or change files in your Documents folder.",
+        "NSDownloadsFolderUsageDescription": "Commands you run in the terminal may read or change files in your Downloads folder, and downloads from the chat may be saved there.",
+        "NSRemovableVolumesUsageDescription": "Commands you run in the terminal may read or change files on external drives.",
+        "NSNetworkVolumesUsageDescription": "Commands you run in the terminal may read or change files on network drives.",
+        "NSFileProviderDomainUsageDescription": "Commands you run in the terminal may read or change files in iCloud Drive and other cloud folders.",
+        "NSBluetoothAlwaysUsageDescription": "For commands you run in the terminal that use Bluetooth.",
+        "NSBluetoothPeripheralUsageDescription": "For commands you run in the terminal that use Bluetooth."
+      }
     },
     "dmg": {
       "writeUpdateInfo": false
