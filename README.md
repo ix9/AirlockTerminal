@@ -40,6 +40,29 @@ in your keychain, if there is one.
 
 **Windows** builds are unsigned: in the SmartScreen prompt, choose **More info > Run anyway**.
 
+### macOS permissions
+macOS treats everything run in Airlock's terminal as Airlock itself. So a command that works in
+Apple's Terminal can be blocked here until Airlock has the permission. Each permission is in
+**System Settings > Privacy & Security**. A copy run from source shows there as Electron.
+
+macOS asks the first time a command needs one of these:
+- **Local Network:** `ping`, `ssh`, `curl` to devices on your network. Without it, they fail
+  with errors like `ping: sendto: No route to host`.
+- **Microphone:** voice mode in the Claude chat, and audio tools. **Camera:** capture tools.
+- **Automation:** `osascript` and scripts that control other apps. Without it, they fail with
+  error -1743.
+- **Files and Folders:** Desktop, Documents, Downloads, iCloud Drive, external and network drives.
+
+Only you can turn these on, and only if you need them:
+- **Full Disk Access:** for `~/Library/Mail`, Messages, Safari data, other apps' data and Time
+  Machine (`tmutil`). Without it: "Operation not permitted".
+- **App Management:** for `brew upgrade --cask` and anything else that replaces apps in
+  /Applications.
+- **Developer Tools:** optional. Programs you build start faster, without macOS's first-launch
+  security scan.
+- **Accessibility, Input Monitoring, Screen Recording:** only for tools that need them, such as
+  `screencapture`, yabai, skhd or cliclick.
+
 ## Docs
 - [Objective](docs/OBJECTIVE.md)
 - [ADR 0001: Electron + node-pty + xterm.js](docs/adr/0001-electron-node-pty-xterm.md)
